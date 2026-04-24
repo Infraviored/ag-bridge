@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════
-// ANTIGRAVITY BRIDGE SCRIPT v14 — Connect Frame Stripping
+// ANTIGRAVITY BRIDGE SCRIPT v15 — Multi-Turn Patience
 // ════════════════════════════════════════════════════════════
 const _origFetch = window.fetch;
 window.__origFetch = _origFetch;
@@ -10,7 +10,6 @@ window.__chatNames = {};
 window.__relinkMode = null;
 window.__relinkOldId = null;
 
-// Helper to strip Connect protocol framing (1 byte type + 4 bytes length)
 function stripConnectFraming(buffer) {
   const chunks = [];
   let offset = 0;
@@ -19,12 +18,8 @@ function stripConnectFraming(buffer) {
     if (offset + 5 + len <= buffer.length) {
       chunks.push(new TextDecoder().decode(buffer.slice(offset + 5, offset + 5 + len)));
       offset += 5 + len;
-    } else {
-      // Partial frame at end of buffer
-      break;
-    }
+    } else { break; }
   }
-  // If we couldn't find a 5-byte header, just decode the whole thing as fallback
   if (chunks.length === 0 && buffer.length > 0) return new TextDecoder().decode(buffer);
   return chunks.join('');
 }
@@ -33,21 +28,17 @@ window.fetch = async function (input, init, ...rest) {
   const url = (input instanceof Request ? input.url : input?.url ?? input) || '';
   const urlStr = String(url);
   const result = _origFetch.apply(this, arguments);
-
   if (urlStr.includes('SendUserCascadeMessage')) {
     const headers = Object.fromEntries(new Headers(init?.headers || {}).entries());
     const bodyStr = init?.body instanceof Uint8Array ? new TextDecoder().decode(init.body) : (init?.body ?? '');
     window.__agCaptured.last = { url: urlStr, headers, body: bodyStr, ts: Date.now() };
   }
-
   const handleId = (id) => {
     if (window.__relinkMode !== null) {
       if (id === window.__relinkOldId) return;
       const targetIdx = window.__relinkMode;
       Object.keys(window.__chatRegistry).forEach(k => {
-        if (window.__chatRegistry[k] === id && String(k) !== String(targetIdx)) {
-          window.__chatRegistry[k] = ""; 
-        }
+        if (window.__chatRegistry[k] === id && String(k) !== String(targetIdx)) { window.__chatRegistry[k] = ""; }
       });
       window.__chatRegistry[targetIdx] = id;
       console.log(`%c🔗 RELINK SUCCESS: [${targetIdx}] -> ${id}`, 'color:lime; font-weight:bold');
@@ -62,8 +53,7 @@ window.fetch = async function (input, init, ...rest) {
       if (!window.__chatRegistry[idx] || window.__chatRegistry[idx] === "") {
         window.__chatRegistry[idx] = id;
         console.log(`%c🎯 AUTO-FILL: [${idx}] -> ${id}`, 'color:lime; font-weight:bold');
-        foundSlot = true;
-        break;
+        foundSlot = true; break;
       }
     }
     if (!foundSlot) {
@@ -73,7 +63,6 @@ window.fetch = async function (input, init, ...rest) {
       console.log(`%c🆕 AUTO-NEW: [${nextIdx}] -> ${id}`, 'color:lime; font-weight:bold');
     }
   };
-
   if (urlStr.includes('StreamAgentStateUpdates')) {
     result.then(res => {
       const cloned = res.clone();
@@ -91,7 +80,6 @@ window.fetch = async function (input, init, ...rest) {
       })();
     });
   }
-
   if (urlStr.includes('GetConversation') || urlStr.includes('GetCascade')) {
     result.then(async res => {
       try {
@@ -101,7 +89,6 @@ window.fetch = async function (input, init, ...rest) {
       } catch { }
     });
   }
-
   return result;
 };
 
@@ -157,7 +144,7 @@ window.activateStream = async (cascadeId) => {
   });
 };
 
-window.postAndReadAuto = async (text, cascadeId, opts = {}, timeoutMs = 120000) => {
+window.postAndReadAuto = async (text, cascadeId, opts = {}, timeoutMs = 180000) => {
   const allSteps = opts.all === true;
   window.__agReadLog = window.__agReadLog.filter(x => !x.payload?.includes(cascadeId));
   await window.activateStream(cascadeId);
@@ -176,7 +163,10 @@ window.postAndReadAuto = async (text, cascadeId, opts = {}, timeoutMs = 120000) 
       const matches = [...fullBuffer.matchAll(/"(?:modifiedResponse|text)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)];
       if (matches.length > 0) lastContentTs = now;
 
-      if (lastIdleTs > 0 && lastIdleTs >= lastRunningTs && (now - lastContentTs > 2000) && (now - lastIdleTs > 1500)) {
+      // PATIENCE: Wait longer if we see tool calls or transitions
+      const gracePeriod = fullBuffer.includes('CORTEX_STEP_TYPE_RUN_COMMAND') ? 8000 : 5000;
+
+      if (lastIdleTs > 0 && lastIdleTs >= lastRunningTs && (now - lastContentTs > 3000) && (now - lastIdleTs > gracePeriod)) {
         clearInterval(iv);
         const raw = [];
         const seen = new Set();
@@ -188,7 +178,7 @@ window.postAndReadAuto = async (text, cascadeId, opts = {}, timeoutMs = 120000) 
         resolve({ answer: allSteps ? steps.join('\n\n---\n\n') : (steps.at(-1) || ''), steps });
       }
       if (now - sentAt > timeoutMs) { clearInterval(iv); reject(new Error('Timeout')); }
-    }, 400);
+    }, 500);
   });
 };
 
@@ -208,4 +198,4 @@ setInterval(() => {
     .catch(e => localStorage.setItem('__res_' + reqId, JSON.stringify({ answer: `ERROR: ${e}` })));
 }, 200);
 
-console.log('%c🚀 Bridge v14 — Frame Stripping READY', 'color:gold; font-weight:bold');
+console.log('%c🚀 Bridge v15 — Multi-Turn Patience READY', 'color:gold; font-weight:bold');
