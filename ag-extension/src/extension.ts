@@ -7,9 +7,20 @@ import { execSync } from 'child_process';
 
 let statusBarItem: vscode.StatusBarItem;
 let dashboardPanel: vscode.WebviewPanel | undefined;
+let outputChannel: vscode.OutputChannel;
 let bridgeActive = false;
 let relinkInProgress: string | null = null;
 let pendingDeletes: Set<string> = new Set(); // Guard against race condition
+let lastLogIndex = 0;
+let isPolling = false;
+let lastHeartbeat = 0;
+
+function logToChannel(msg: string) {
+    if (!outputChannel) {
+        outputChannel = vscode.window.createOutputChannel("Antigravity Bridge");
+    }
+    outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] ${msg}`);
+}
 
 function getConfigPath(): string {
     const root = vscode.workspace.workspaceFolders?.[0].uri.fsPath || '';
@@ -57,7 +68,7 @@ function setupGlobalCommand(extensionPath: string) {
             fs.symlinkSync(scriptPath, linkPath);
         }
     } catch (e) {
-        console.error('Failed to setup global command:', e);
+        logToChannel(`[ERROR] Global command setup failed: ${e}`);
     }
 }
 
@@ -111,9 +122,13 @@ async function injectBridge() {
                 ws.close();
                 bridgeActive = true;
                 updateStatusBar(true);
+                logToChannel("✨ Bridge successfully injected into browser.");
             }
         });
-        ws.on('error', () => updateStatusBar(false));
+        ws.on('error', (e) => {
+            logToChannel(`[ERROR] Injection WebSocket error: ${e.message}`);
+            updateStatusBar(false);
+        });
     } catch (e) {
         updateStatusBar(false);
     }
@@ -173,7 +188,7 @@ async function updateDashboard() {
             ws.send(JSON.stringify({
                 id: 100,
                 method: 'Runtime.evaluate',
-                params: { expression: 'JSON.stringify({ registry: window.__chatRegistry, names: window.__chatNames, captured: !!window.__agCaptured?.last, relinkMode: window.__relinkMode })' }
+                params: { expression: 'JSON.stringify({ registry: window.__chatRegistry, names: window.__chatNames, captured: !!window.__agCaptured?.last, relinkMode: window.__relinkMode, logs: (window.__agLogs || []).slice(' + lastLogIndex + ') })' }
             }));
         });
         ws.on('message', (data: WebSocket.Data) => {
@@ -184,6 +199,12 @@ async function updateDashboard() {
                 
                 if (browserState.relinkMode === null && relinkInProgress !== null) {
                    relinkInProgress = null;
+                }
+
+                // PROCESS LOGS
+                if (browserState.logs && browserState.logs.length > 0) {
+                    browserState.logs.forEach((l: any) => logToChannel(l.msg));
+                    lastLogIndex += browserState.logs.length;
                 }
 
                 // Clean up pending deletes once browser confirms they are gone
@@ -419,10 +440,26 @@ function getDashboardHtml() {
 
 export function activate(context: vscode.ExtensionContext) {
     setupGlobalCommand(context.extensionPath);
+    outputChannel = vscode.window.createOutputChannel("Antigravity Bridge");
+    context.subscriptions.push(outputChannel);
     context.subscriptions.push(vscode.commands.registerCommand('agbridge.inject', () => injectBridge()));
     context.subscriptions.push(vscode.commands.registerCommand('agbridge.showDashboard', () => showDashboard()));
     updateStatusBar(false);
     injectBridge().catch(() => {});
+    
+    // Background polling for logs
+    setInterval(async () => {
+        if (isPolling) return;
+        isPolling = true;
+        
+        try {
+            const tab = await getAntigravityTab();
+            if (tab) {
+                await updateDashboard();
+            }
+        } catch (e) {}
+        isPolling = false;
+    }, 2000);
 }
 
 export function deactivate() { if (statusBarItem) statusBarItem.dispose(); }
