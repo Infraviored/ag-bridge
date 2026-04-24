@@ -2,7 +2,7 @@
   "name": "ag-bridge-extension",
   "displayName": "Antigravity Bridge",
   "description": "Automates bridge injection and communication with Antigravity",
-  "version": "1.8.2",
+  "version": "1.8.4",
   "publisher": "infraviored",
   "repository": {
     "type": "git",
@@ -28,7 +28,22 @@
         "command": "agbridge.showDashboard",
         "title": "AG: Show Status Dashboard"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Antigravity Bridge",
+      "properties": {
+        "antigravity.bridge.verbose": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable deterministic Triple-Chunk Dump on every bridge resolution."
+        },
+        "antigravity.bridge.timeout": {
+          "type": "number",
+          "default": 60000,
+          "description": "Silence timeout in milliseconds before resolving the agent response (default: 1 minute)."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

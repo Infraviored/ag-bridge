@@ -1,4 +1,4 @@
-// ANTIGRAVITY BRIDGE SCRIPT v24 — DETERMINISTIC DUMP
+// ANTIGRAVITY BRIDGE SCRIPT v26 — STATE-AWARE
 const _origFetch = window.fetch;
 window.__origFetch = _origFetch;
 
@@ -102,11 +102,12 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
     if (!res.ok) throw new Error(`POST Failed: ${res.status}`);
 
     const sentAt = Date.now();
-    log(`📬 POST OK. Entering Silence Watch (sentAt=${sentAt})...`, 'info');
+    log(`📬 POST OK. Watching (sentAt=${sentAt}, patience=${window.__agTimeout}ms)...`, 'info');
 
     let lastRunningTs = 0, lastIdleTs = 0, lastChunkTs = 0;
-    const timeoutMs = 120000;
-    const SILENCE_MS = 8000;
+    let isFastExit = false;
+    const timeoutMs = 180000;
+    const SILENCE_MS = window.__agTimeout;
 
     return new Promise((resolve, reject) => {
         const iv = setInterval(() => {
@@ -117,15 +118,24 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
                 lastChunkTs = Math.max(lastChunkTs, ch.ts);
                 if (ch.payload.includes('"CASCADE_RUN_STATUS_RUNNING"')) lastRunningTs = ch.ts;
                 if (ch.payload.includes('"CASCADE_RUN_STATUS_IDLE"'))    lastIdleTs = ch.ts;
+                
+                // ⚡ FAST-EXIT SIGNAL DETECTION
+                if (ch.payload.includes('"terminationReason"') || ch.payload.includes('"artifactSnapshotsUpdate"')) {
+                    if (!isFastExit) {
+                        log(`⚡ FAST-EXIT: Termination signal detected! Resolving...`, 'success');
+                        isFastExit = true;
+                    }
+                }
             }
 
             const isIdle = lastIdleTs > 0 && lastIdleTs >= lastRunningTs;
             const silenceTime = lastChunkTs > 0 ? (now - lastChunkTs) : (now - sentAt);
-            const canResolve = isIdle && (silenceTime > SILENCE_MS);
+            const canResolve = isFastExit || (isIdle && (silenceTime > SILENCE_MS));
 
-            if ((now - sentAt) % 2500 < 600) {
+            if ((now - sentAt) % 2500 < 600 && !isFastExit) {
                 const state = lastRunningTs > lastIdleTs ? 'RUNNING' : (lastIdleTs > 0 ? 'IDLE' : 'WAITING');
-                log(`⏳ HEARTBEAT: Chunks=${relevant.length} | State=${state} | Silence=${(silenceTime/1000).toFixed(1)}s/${SILENCE_MS/1000}s`, 'debug');
+                const suffix = state === 'RUNNING' ? ' (Waiting for tool...)' : ` (Silence: ${(silenceTime/1000).toFixed(1)}s/${SILENCE_MS/1000}s)`;
+                log(`⏳ HEARTBEAT: Chunks=${relevant.length} | State=${state}${suffix}`, 'debug');
             }
 
             if (canResolve) {
@@ -134,13 +144,11 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
                 const matches = [...fullText.matchAll(/"(?:modifiedResponse|text)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)];
                 const raw = matches.map(m => m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
                 
-                // 🏁 TRIPLE DUMP (Deterministic Inspection)
-                if (relevant.length > 0) {
+                // DETERMINISTIC DUMP (Conditional)
+                if (window.__agVerbose && relevant.length > 0) {
                     log(`🏁 --- TRIPLE DUMP START (Total Chunks: ${relevant.length}) ---`, 'warn');
                     log(`[1/3] FIRST CHUNK:\n${relevant[0].payload}`, 'debug');
-                    if (relevant.length > 2) {
-                        log(`[2/3] PENULTIMATE CHUNK:\n${relevant.at(-2).payload}`, 'debug');
-                    }
+                    if (relevant.length > 2) log(`[2/3] PENULTIMATE CHUNK:\n${relevant.at(-2).payload}`, 'debug');
                     log(`[3/3] FINAL CHUNK:\n${relevant.at(-1).payload}`, 'debug');
                     log(`🏁 --- TRIPLE DUMP END ---`, 'warn');
                 }
@@ -153,7 +161,7 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
 
             if (now - sentAt > timeoutMs) {
                 clearInterval(iv);
-                log(`❌ TIMEOUT (120s): Total chunks=${relevant.length}, lastIdle=${lastIdleTs>0}`, 'error');
+                log(`❌ TIMEOUT (180s): Total chunks=${relevant.length}, lastIdle=${lastIdleTs>0}`, 'error');
                 reject(new Error(`Timeout. Chunks: ${relevant.length}`));
             }
         }, 500);
