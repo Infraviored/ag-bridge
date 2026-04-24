@@ -27,6 +27,10 @@
       {
         "command": "agbridge.send",
         "title": "AG: Send to Chat"
+      },
+      {
+        "command": "agbridge.manageChats",
+        "title": "AG: Manage Chats"
       }
     ]
   },

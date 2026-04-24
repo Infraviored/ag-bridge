@@ -30,17 +30,13 @@ async function injectBridge() {
     try {
         const tab = await getAntigravityTab();
         if (!tab) {
-            // updateStatusBar(false); // Silent fail on auto-start is fine, but message on manual is better
+            updateStatusBar(false);
             return;
         }
 
         const scriptPath = path.join(__dirname, 'bridge.js');
-        // Falls im out-Ordner nicht gefunden (z.B. während Entwicklung), schau im src-Ordner
         const finalScriptPath = fs.existsSync(scriptPath) ? scriptPath : path.join(__dirname, '..', 'src', 'bridge.js');
-        if (!fs.existsSync(finalScriptPath)) {
-            console.error('Bridge script not found at', finalScriptPath);
-            return;
-        }
+        if (!fs.existsSync(finalScriptPath)) return;
         const script = fs.readFileSync(finalScriptPath, 'utf8');
 
         const ws = new WebSocket(tab.webSocketDebuggerUrl);
@@ -62,13 +58,11 @@ async function injectBridge() {
             }
         });
 
-        ws.on('error', (e: Error) => {
-            console.error('WS Error:', e);
+        ws.on('error', () => {
             updateStatusBar(false);
         });
 
     } catch (e) {
-        console.error('Inject Error:', e);
         updateStatusBar(false);
     }
 }
@@ -76,24 +70,105 @@ async function injectBridge() {
 function updateStatusBar(active: boolean) {
     if (!statusBarItem) {
         statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-        statusBarItem.command = 'agbridge.inject';
         statusBarItem.show();
     }
     if (active) {
         statusBarItem.text = '$(zap) AG Bridge Active';
+        statusBarItem.command = 'agbridge.manageChats';
         statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
-        statusBarItem.tooltip = 'Bridge ist aktiv. Klicken zum Re-Injektieren.';
+        statusBarItem.tooltip = 'Klicken, um Chats zu verwalten';
     } else {
         statusBarItem.text = '$(circle-slash) AG Bridge Inactive';
+        statusBarItem.command = 'agbridge.inject';
         statusBarItem.backgroundColor = undefined;
-        statusBarItem.tooltip = 'Bridge inaktiv. Klicken zum Injizieren (Port 9222 muss offen sein).';
+        statusBarItem.tooltip = 'Bridge inaktiv. Klicken zum Injizieren.';
     }
+}
+
+async function manageChats() {
+    const tab = await getAntigravityTab();
+    if (!tab) {
+        vscode.window.showErrorMessage('Antigravity nicht erreichbar.');
+        return;
+    }
+
+    const ws = new WebSocket(tab.webSocketDebuggerUrl);
+    ws.on('open', () => {
+        // Registry und Names aus dem Browser holen
+        ws.send(JSON.stringify({
+            id: 10,
+            method: 'Runtime.evaluate',
+            params: { expression: 'JSON.stringify({ registry: window.__chatRegistry, names: window.__chatNames })' }
+        }));
+
+        ws.on('message', async (data: WebSocket.Data) => {
+            const msg = JSON.parse(data.toString());
+            if (msg.id === 10) {
+                const browserState = JSON.parse(msg.result?.result?.value || '{}');
+                const registry = browserState.registry || {};
+                const browserNames = browserState.names || {};
+
+                // Lokal ag-config.json lesen
+                const configPath = path.join(vscode.workspace.workspaceFolders?.[0].uri.fsPath || '', 'ag-config.json');
+                let config: any = { chatNames: {} };
+                if (fs.existsSync(configPath)) {
+                    try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { }
+                }
+
+                const items = Object.keys(registry).map(idx => {
+                    const id = registry[idx];
+                    const name = config.chatNames[idx] || browserNames[idx] || '';
+                    return {
+                        label: `Chat ${idx}`,
+                        description: name ? `[${name}] ${id.slice(0, 8)}...` : id,
+                        idx: idx,
+                        id: id
+                    };
+                });
+
+                if (items.length === 0) {
+                    vscode.window.showInformationMessage('Noch keine Chats erkannt. Schreib erst etwas im Antigravity Chat.');
+                    ws.close();
+                    return;
+                }
+
+                const selected = await vscode.window.showQuickPick(items, {
+                    placeHolder: 'Wähle einen Chat zum Umbenennen'
+                });
+
+                if (selected) {
+                    const newName = await vscode.window.showInputBox({
+                        prompt: `Name für Chat ${selected.idx} (${selected.id})`,
+                        value: config.chatNames[selected.idx] || ''
+                    });
+
+                    if (newName !== undefined) {
+                        // In ag-config.json speichern
+                        config.chatNames[selected.idx] = newName;
+                        config.registry = registry;
+                        config.ts = Date.now();
+                        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+                        // Zurück in den Browser syncen
+                        ws.send(JSON.stringify({
+                            id: 11,
+                            method: 'Runtime.evaluate',
+                            params: { expression: `window.__chatNames[${selected.idx}] = "${newName}"; console.log("Name ${selected.idx} -> ${newName} synced")` }
+                        }));
+                        
+                        vscode.window.showInformationMessage(`Chat ${selected.idx} heißt nun "${newName}"`);
+                    }
+                }
+                ws.close();
+            }
+        });
+    });
 }
 
 async function sendToChat() {
     const tab = await getAntigravityTab();
     if (!tab) {
-        vscode.window.showErrorMessage('Kein Antigravity Tab gefunden. Port 9222?');
+        vscode.window.showErrorMessage('Kein Antigravity Tab gefunden.');
         return;
     }
 
@@ -136,8 +211,6 @@ async function sendToChat() {
                 clearInterval(iv);
                 ws.close();
                 
-                vscode.window.showInformationMessage(`Antigravity Antwort erhalten!`);
-                
                 const channel = vscode.window.createOutputChannel("Antigravity Bridge");
                 channel.appendLine(`--- AG RESPONSE (${chatIndex}) ---`);
                 channel.appendLine(res.answer);
@@ -148,15 +221,9 @@ async function sendToChat() {
             }
         });
     });
-    
-    ws.on('error', (e) => {
-        vscode.window.showErrorMessage(`WebSocket Fehler: ${e.message}`);
-    });
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Antigravity Bridge Extension is now active!');
-
     context.subscriptions.push(
         vscode.commands.registerCommand('agbridge.inject', () => {
             injectBridge();
@@ -167,14 +234,14 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('agbridge.send', sendToChat)
     );
 
-    updateStatusBar(false);
+    context.subscriptions.push(
+        vscode.commands.registerCommand('agbridge.manageChats', manageChats)
+    );
 
-    // Auto-inject on start
+    updateStatusBar(false);
     injectBridge().catch(() => {});
 }
 
 export function deactivate() {
-    if (statusBarItem) {
-        statusBarItem.dispose();
-    }
+    if (statusBarItem) statusBarItem.dispose();
 }
