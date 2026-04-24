@@ -2,7 +2,7 @@
   "name": "ag-bridge-extension",
   "displayName": "Antigravity Bridge",
   "description": "Automates bridge injection and communication with Antigravity",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "publisher": "infraviored",
   "repository": {
     "type": "git",
@@ -25,12 +25,8 @@
         "title": "AG: Inject Bridge"
       },
       {
-        "command": "agbridge.send",
-        "title": "AG: Send to Chat"
-      },
-      {
-        "command": "agbridge.manageChats",
-        "title": "AG: Manage Chats"
+        "command": "agbridge.showDashboard",
+        "title": "AG: Show Status Dashboard"
       }
     ]
   },

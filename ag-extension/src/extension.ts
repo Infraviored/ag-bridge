@@ -6,6 +6,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 
 let statusBarItem: vscode.StatusBarItem;
+let dashboardPanel: vscode.WebviewPanel | undefined;
 let bridgeActive = false;
 
 async function getAntigravityTab(): Promise<any> {
@@ -54,7 +55,6 @@ async function injectBridge() {
                 ws.close();
                 bridgeActive = true;
                 updateStatusBar(true);
-                vscode.window.showInformationMessage('🚀 Antigravity Bridge injiziert!');
             }
         });
 
@@ -74,153 +74,276 @@ function updateStatusBar(active: boolean) {
     }
     if (active) {
         statusBarItem.text = '$(zap) AG Bridge Active';
-        statusBarItem.command = 'agbridge.manageChats';
+        statusBarItem.command = 'agbridge.showDashboard';
         statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
-        statusBarItem.tooltip = 'Klicken, um Chats zu verwalten';
     } else {
         statusBarItem.text = '$(circle-slash) AG Bridge Inactive';
         statusBarItem.command = 'agbridge.inject';
         statusBarItem.backgroundColor = undefined;
-        statusBarItem.tooltip = 'Bridge inaktiv. Klicken zum Injizieren.';
     }
 }
 
-async function manageChats() {
-    const tab = await getAntigravityTab();
-    if (!tab) {
-        vscode.window.showErrorMessage('Antigravity nicht erreichbar.');
+async function showDashboard() {
+    if (dashboardPanel) {
+        dashboardPanel.reveal(vscode.ViewColumn.Beside);
         return;
     }
 
-    const ws = new WebSocket(tab.webSocketDebuggerUrl);
-    ws.on('open', () => {
-        // Registry und Names aus dem Browser holen
-        ws.send(JSON.stringify({
-            id: 10,
-            method: 'Runtime.evaluate',
-            params: { expression: 'JSON.stringify({ registry: window.__chatRegistry, names: window.__chatNames })' }
-        }));
+    dashboardPanel = vscode.window.createWebviewPanel(
+        'agDashboard',
+        'Antigravity Bridge Status',
+        vscode.ViewColumn.Beside,
+        { enableScripts: true }
+    );
 
-        ws.on('message', async (data: WebSocket.Data) => {
+    dashboardPanel.onDidDispose(() => {
+        dashboardPanel = undefined;
+    });
+
+    dashboardPanel.webview.onDidReceiveMessage(async message => {
+        switch (message.command) {
+            case 'rename':
+                await renameChat(message.idx, message.id);
+                updateDashboard();
+                break;
+            case 'refresh':
+                updateDashboard();
+                break;
+        }
+    });
+
+    dashboardPanel.webview.html = getDashboardHtml();
+    updateDashboard();
+}
+
+async function updateDashboard() {
+    if (!dashboardPanel) return;
+
+    try {
+        const tab = await getAntigravityTab();
+        if (!tab) {
+            dashboardPanel.webview.postMessage({ type: 'status', data: { connected: false } });
+            return;
+        }
+
+        const ws = new WebSocket(tab.webSocketDebuggerUrl);
+        ws.on('open', () => {
+            ws.send(JSON.stringify({
+                id: 100,
+                method: 'Runtime.evaluate',
+                params: { expression: 'JSON.stringify({ registry: window.__chatRegistry, names: window.__chatNames, captured: !!window.__agCaptured?.last })' }
+            }));
+        });
+
+        ws.on('message', (data: WebSocket.Data) => {
             const msg = JSON.parse(data.toString());
-            if (msg.id === 10) {
-                const browserState = JSON.parse(msg.result?.result?.value || '{}');
-                const registry = browserState.registry || {};
-                const browserNames = browserState.names || {};
-
-                // Lokal ag-config.json lesen
+            if (msg.id === 100) {
+                const state = JSON.parse(msg.result?.result?.value || '{}');
+                
+                // config laden
                 const configPath = path.join(vscode.workspace.workspaceFolders?.[0].uri.fsPath || '', 'ag-config.json');
                 let config: any = { chatNames: {} };
                 if (fs.existsSync(configPath)) {
                     try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { }
                 }
 
-                const items = Object.keys(registry).map(idx => {
-                    const id = registry[idx];
-                    const name = config.chatNames[idx] || browserNames[idx] || '';
-                    return {
-                        label: `Chat ${idx}`,
-                        description: name ? `[${name}] ${id.slice(0, 8)}...` : id,
-                        idx: idx,
-                        id: id
-                    };
-                });
-
-                if (items.length === 0) {
-                    vscode.window.showInformationMessage('Noch keine Chats erkannt. Schreib erst etwas im Antigravity Chat.');
-                    ws.close();
-                    return;
-                }
-
-                const selected = await vscode.window.showQuickPick(items, {
-                    placeHolder: 'Wähle einen Chat zum Umbenennen'
-                });
-
-                if (selected) {
-                    const newName = await vscode.window.showInputBox({
-                        prompt: `Name für Chat ${selected.idx} (${selected.id})`,
-                        value: config.chatNames[selected.idx] || ''
-                    });
-
-                    if (newName !== undefined) {
-                        // In ag-config.json speichern
-                        config.chatNames[selected.idx] = newName;
-                        config.registry = registry;
-                        config.ts = Date.now();
-                        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-
-                        // Zurück in den Browser syncen
-                        ws.send(JSON.stringify({
-                            id: 11,
-                            method: 'Runtime.evaluate',
-                            params: { expression: `window.__chatNames[${selected.idx}] = "${newName}"; console.log("Name ${selected.idx} -> ${newName} synced")` }
-                        }));
-                        
-                        vscode.window.showInformationMessage(`Chat ${selected.idx} heißt nun "${newName}"`);
+                dashboardPanel?.webview.postMessage({
+                    type: 'status',
+                    data: {
+                        connected: true,
+                        tokenCaptured: state.captured,
+                        registry: state.registry,
+                        names: { ...state.names, ...config.chatNames }
                     }
-                }
+                });
                 ws.close();
             }
         });
-    });
+    } catch (e) {
+        dashboardPanel.webview.postMessage({ type: 'status', data: { connected: false } });
+    }
 }
 
-async function sendToChat() {
-    const tab = await getAntigravityTab();
-    if (!tab) {
-        vscode.window.showErrorMessage('Kein Antigravity Tab gefunden.');
-        return;
+async function renameChat(idx: string, id: string) {
+    const configPath = path.join(vscode.workspace.workspaceFolders?.[0].uri.fsPath || '', 'ag-config.json');
+    let config: any = { chatNames: {} };
+    if (fs.existsSync(configPath)) {
+        try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { }
     }
 
-    const chatIndexStr = await vscode.window.showInputBox({
-        prompt: 'Chat Index oder Name (z.B. 1)',
-        placeHolder: '1'
+    const newName = await vscode.window.showInputBox({
+        prompt: `Name für Chat ${idx} (${id})`,
+        value: config.chatNames[idx] || ''
     });
-    if (!chatIndexStr) return;
 
-    const text = await vscode.window.showInputBox({
-        prompt: 'Nachricht an Antigravity',
-        placeHolder: 'Schreib hello.py...'
-    });
-    if (!text) return;
+    if (newName !== undefined) {
+        config.chatNames[idx] = newName;
+        config.ts = Date.now();
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 
-    const reqId = randomUUID();
-    const chatIndex = isNaN(parseInt(chatIndexStr)) ? chatIndexStr : parseInt(chatIndexStr);
+        const tab = await getAntigravityTab();
+        if (tab) {
+            const ws = new WebSocket(tab.webSocketDebuggerUrl);
+            ws.on('open', () => {
+                ws.send(JSON.stringify({
+                    id: 101,
+                    method: 'Runtime.evaluate',
+                    params: { expression: `window.__chatNames[${idx}] = "${newName}"; console.log("Name synced")` }
+                }));
+                ws.on('message', () => ws.close());
+            });
+        }
+    }
+}
 
-    const ws = new WebSocket(tab.webSocketDebuggerUrl);
-    ws.on('open', () => {
-        const cmd = JSON.stringify({ chatIndex, text, reqId, opts: { all: false } });
-        ws.send(JSON.stringify({
-            id: 1,
-            method: 'Runtime.evaluate',
-            params: { expression: `localStorage.setItem('__cmd', ${JSON.stringify(cmd)})` }
-        }));
+function getDashboardHtml() {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: rgba(45, 45, 45, 0.8);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+        }
+        h2 { color: #569cd6; margin-top: 0; display: flex; align-items: center; gap: 10px; }
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 15px;
+            padding: 10px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+        }
+        .indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .online { background: #4ec9b0; box-shadow: 0 0 8px #4ec9b0; }
+        .offline { background: #f44747; box-shadow: 0 0 8px #f44747; }
+        .chat-list { margin-top: 20px; }
+        .chat-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px;
+            background: rgba(255,255,255,0.05);
+            margin-bottom: 8px;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+        .chat-item:hover { background: rgba(255,255,255,0.08); }
+        .chat-info { flex: 1; }
+        .chat-name { font-weight: bold; color: #ce9178; }
+        .chat-id { font-size: 0.8em; color: #808080; display: block; }
+        button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        button:hover { background: #1177bb; }
+        .refresh-btn { float: right; background: transparent; border: 1px solid #569cd6; color: #569cd6; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <button class="refresh-btn" onclick="refresh()">Refresh</button>
+        <h2>🚀 Antigravity Bridge</h2>
+        
+        <div class="status-row">
+            <span>Bridge Connection:</span>
+            <span id="bridge-status"><span class="indicator offline"></span> Disconnected</span>
+        </div>
+        <div class="status-row">
+            <span>CSRF Token:</span>
+            <span id="token-status"><span class="indicator offline"></span> Missing</span>
+        </div>
 
-        const iv = setInterval(() => {
-            ws.send(JSON.stringify({
-                id: 2,
-                method: 'Runtime.evaluate',
-                params: { expression: `localStorage.getItem('__res_${reqId}')` }
-            }));
-        }, 500);
+        <h3>Detected Chats</h3>
+        <div id="chat-list" class="chat-list">
+            <p style="color: #808080;">No chats detected yet...</p>
+        </div>
+    </div>
 
-        ws.on('message', (data: WebSocket.Data) => {
-            const msg = JSON.parse(data.toString());
-            if (msg.id === 2 && msg.result?.result?.value) {
-                const res = JSON.parse(msg.result.result.value);
-                clearInterval(iv);
-                ws.close();
+    <script>
+        const vscode = acquireVsCodeApi();
+        
+        function refresh() {
+            vscode.postMessage({ command: 'refresh' });
+        }
+
+        function rename(idx, id) {
+            vscode.postMessage({ command: 'rename', idx, id });
+        }
+
+        window.addEventListener('message', event => {
+            const { type, data } = event.data;
+            if (type === 'status') {
+                const bStatus = document.getElementById('bridge-status');
+                const tStatus = document.getElementById('token-status');
                 
-                const channel = vscode.window.createOutputChannel("Antigravity Bridge");
-                channel.appendLine(`--- AG RESPONSE (${chatIndex}) ---`);
-                channel.appendLine(res.answer);
-                if (res.files && res.files.length > 0) {
-                    channel.appendLine(`Files: ${res.files.join(', ')}`);
+                if (data.connected) {
+                    bStatus.innerHTML = '<span class="indicator online"></span> Connected';
+                    tStatus.innerHTML = data.tokenCaptured ? 
+                        '<span class="indicator online"></span> Captured' : 
+                        '<span class="indicator offline"></span> Missing (Write in chat!)';
+                    
+                    const list = document.getElementById('chat-list');
+                    list.innerHTML = '';
+                    const registry = data.registry || {};
+                    const names = data.names || {};
+                    
+                    const keys = Object.keys(registry);
+                    if (keys.length === 0) {
+                        list.innerHTML = '<p style="color: #808080;">No chats detected yet...</p>';
+                    } else {
+                        keys.forEach(idx => {
+                            const id = registry[idx];
+                            const name = names[idx] || 'No Name';
+                            list.innerHTML += \`
+                                <div class="chat-item">
+                                    <div class="chat-info">
+                                        <span class="chat-name">\${name} (Chat \${idx})</span>
+                                        <span class="chat-id">\${id}</span>
+                                    </div>
+                                    <button onclick="rename('\${idx}', '\${id}')">Rename</button>
+                                </div>
+                            \`;
+                        });
+                    }
+                } else {
+                    bStatus.innerHTML = '<span class="indicator offline"></span> Disconnected';
+                    tStatus.innerHTML = '<span class="indicator offline"></span> -';
+                    document.getElementById('chat-list').innerHTML = '<p style="color: #f44747;">Cannot reach Antigravity. Is it running on port 9222?</p>';
                 }
-                channel.show();
             }
         });
-    });
+
+        // Polling for live updates
+        setInterval(refresh, 2000);
+    </script>
+</body>
+</html>`;
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -231,11 +354,7 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('agbridge.send', sendToChat)
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('agbridge.manageChats', manageChats)
+        vscode.commands.registerCommand('agbridge.showDashboard', showDashboard)
     );
 
     updateStatusBar(false);
