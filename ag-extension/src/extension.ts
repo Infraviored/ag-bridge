@@ -3,13 +3,13 @@ import * as http from 'http';
 import WebSocket from 'ws';
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
 import { execSync } from 'child_process';
 
 let statusBarItem: vscode.StatusBarItem;
 let dashboardPanel: vscode.WebviewPanel | undefined;
 let bridgeActive = false;
-let relinkInProgress: string | null = null; // Guard against race conditions
+let relinkInProgress: string | null = null;
+let pendingDeletes: Set<string> = new Set(); // Guard against race condition
 
 function getConfigPath(): string {
     const root = vscode.workspace.workspaceFolders?.[0].uri.fsPath || '';
@@ -149,6 +149,8 @@ async function showDashboard() {
             case 'defineDuty': await defineDuty(message.idx); break;
             case 'resetAll': await resetAll(); break;
             case 'relink': await relink(message.idx); break;
+            case 'cancelRelink': await cancelRelink(message.idx); break;
+            case 'deleteAgent': await deleteAgent(message.idx); break;
             case 'refresh': updateDashboard(); break;
         }
         updateDashboard();
@@ -180,16 +182,22 @@ async function updateDashboard() {
                 const browserState = JSON.parse(msg.result?.result?.value || '{}');
                 const config = loadConfig();
                 
-                // If the bridge says relinkMode is null, but we have relinkInProgress, 
-                // it means the bridge JUST FINISHED relinking.
                 if (browserState.relinkMode === null && relinkInProgress !== null) {
                    relinkInProgress = null;
                 }
 
-                // SYNC REGISTRY (Only if NOT currently relinking that specific index)
+                // Clean up pending deletes once browser confirms they are gone
+                for (const k of Array.from(pendingDeletes)) {
+                    if (!(k in browserState.registry)) {
+                        pendingDeletes.delete(k);
+                    }
+                }
+
                 let changed = false;
                 for(const k in browserState.registry) {
-                    if (relinkInProgress === k) continue; // DON'T SYNC WHILE RELINKING
+                    if (relinkInProgress === k) continue; 
+                    if (pendingDeletes.has(k)) continue; // GUARD: Do not restore ghost agents!
+
                     if(config.registry[k] !== browserState.registry[k]) { 
                         config.registry[k] = browserState.registry[k]; 
                         changed = true; 
@@ -235,36 +243,75 @@ async function renameChat(idx: string) {
 
 async function defineDuty(idx: string) {
     const config = loadConfig();
-    const duty = await vscode.window.showInputBox({ prompt: `Duty/Role for Chat ${idx}`, value: config.chatDuties[idx] || '' });
+    const duty = await vscode.window.showInputBox({ prompt: `Role for Chat ${idx}`, value: config.chatDuties[idx] || '' });
     if (duty !== undefined) { config.chatDuties[idx] = duty; saveConfig(config); }
 }
 
 async function resetAll() {
-    const confirm = await vscode.window.showWarningMessage('Wipe ALL agent mappings?', 'Yes', 'No');
+    const confirm = await vscode.window.showWarningMessage('Wipe ALL mappings and STOP relinking?', 'Yes', 'No');
     if (confirm !== 'Yes') return;
+    relinkInProgress = null;
+    
+    // WIPING ABSOLUTELY EVERYTHING
     const config = loadConfig();
     config.registry = {};
+    config.chatNames = {};
+    config.chatDuties = {};
     saveConfig(config);
+    
     const tab = await getAntigravityTab();
     if (tab) {
         const ws = new WebSocket(tab.webSocketDebuggerUrl);
         ws.on('open', () => {
-            ws.send(JSON.stringify({ id: 102, method: 'Runtime.evaluate', params: { expression: `window.__chatRegistry = {}; window.__relinkMode = null;` } }));
+            ws.send(JSON.stringify({ id: 102, method: 'Runtime.evaluate', params: { expression: `window.__chatRegistry = {}; window.__chatNames = {}; window.__relinkMode = null;` } }));
             ws.on('message', () => ws.close());
         });
     }
 }
 
 async function relink(idx: string) {
-    relinkInProgress = idx; // LOCK IT
+    relinkInProgress = idx;
     const config = loadConfig();
+    const oldId = config.registry[idx] || "";
     config.registry[idx] = ""; 
     saveConfig(config);
     const tab = await getAntigravityTab();
     if (tab) {
         const ws = new WebSocket(tab.webSocketDebuggerUrl);
         ws.on('open', () => {
-            ws.send(JSON.stringify({ id: 103, method: 'Runtime.evaluate', params: { expression: `window.__chatRegistry[${idx}] = ""; window.__relinkMode = ${idx};` } }));
+            ws.send(JSON.stringify({ id: 103, method: 'Runtime.evaluate', params: { expression: `window.__chatRegistry[${idx}] = ""; window.__relinkMode = ${idx}; window.__relinkOldId = "${oldId}";` } }));
+            ws.on('message', () => ws.close());
+        });
+    }
+}
+
+async function cancelRelink(idx: string) {
+    relinkInProgress = null;
+    const tab = await getAntigravityTab();
+    if (tab) {
+        const ws = new WebSocket(tab.webSocketDebuggerUrl);
+        ws.on('open', () => {
+            ws.send(JSON.stringify({ id: 104, method: 'Runtime.evaluate', params: { expression: `window.__relinkMode = null; window.__relinkOldId = null;` } }));
+            ws.on('message', () => ws.close());
+        });
+    }
+}
+
+async function deleteAgent(idx: string) {
+    // INSTANT DELETE. NO CONFIRMATION.
+    const config = loadConfig();
+    pendingDeletes.add(idx.toString());
+
+    delete config.registry[idx];
+    delete config.chatNames[idx];
+    delete config.chatDuties[idx];
+    saveConfig(config);
+    
+    const tab = await getAntigravityTab();
+    if (tab) {
+        const ws = new WebSocket(tab.webSocketDebuggerUrl);
+        ws.on('open', () => {
+            ws.send(JSON.stringify({ id: 105, method: 'Runtime.evaluate', params: { expression: `delete window.__chatRegistry[${idx}]; delete window.__chatNames[${idx}]; if(window.__relinkMode == ${idx}) window.__relinkMode = null;` } }));
             ws.on('message', () => ws.close());
         });
     }
@@ -277,18 +324,18 @@ function getDashboardHtml() {
     <meta charset="UTF-8">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #1e1e1e; color: #d4d4d4; padding: 20px; line-height: 1.5; }
-        .container { background: rgba(45, 45, 45, 0.8); border-radius: 12px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(10px); }
+        .container { position: relative; background: rgba(45, 45, 45, 0.8); border-radius: 12px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(10px); }
         h2 { color: #569cd6; margin: 0 0 20px 0; display: flex; align-items: center; gap: 10px; }
         h3 { color: #9cdcfe; border-bottom: 1px solid #444; padding-bottom: 5px; margin-top: 30px; display: flex; justify-content: space-between; align-items: center; }
         .status-row { display: flex; justify-content: space-between; margin-bottom: 10px; padding: 8px 12px; background: rgba(0,0,0,0.2); border-radius: 6px; }
         .indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
         .online { background: #4ec9b0; box-shadow: 0 0 8px #4ec9b0; }
         .offline { background: #f44747; box-shadow: 0 0 8px #f44747; }
-        .chat-item { padding: 15px; background: rgba(255,255,255,0.05); margin-bottom: 10px; border-radius: 8px; border-left: 4px solid #569cd6; transition: 0.3s; }
+        .chat-item { padding: 15px; background: rgba(255,255,255,0.05); margin-bottom: 10px; border-radius: 8px; border-left: 4px solid #569cd6; transition: 0.3s; position: relative; }
         .chat-item.relinking { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.2); animation: pulse 2s infinite; }
         @keyframes pulse { 0% { box-shadow: 0 0 0px #f59e0b; } 50% { box-shadow: 0 0 15px #f59e0b; } 100% { box-shadow: 0 0 0px #f59e0b; } }
         .chat-name { font-weight: bold; color: #ce9178; font-size: 1.1em; }
-        .chat-id { font-size: 0.75em; color: #808080; font-family: monospace; overflow-wrap: break-word; }
+        .chat-id { font-size: 0.75em; color: #808080; font-family: monospace; overflow-wrap: break-word; padding-right: 25px; }
         .chat-duty { font-style: italic; color: #b5cea8; margin-top: 5px; font-size: 0.9em; background: rgba(0,0,0,0.15); padding: 5px 8px; border-radius: 4px; }
         .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
         button { background: #333; color: #ccc; border: 1px solid #444; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; transition: 0.2s; }
@@ -296,13 +343,17 @@ function getDashboardHtml() {
         button.primary { background: #0e639c; color: white; border: none; }
         button.danger { color: #f44747; border-color: #f44747; }
         button.danger:hover { background: #f44747; color: white; }
+        button.warning { color: #f59e0b; border-color: #f59e0b; }
         button.copy-btn { background: #4ec9b0; color: #1e1e1e; border: none; font-weight: bold; width: 100%; margin-top: 20px; padding: 10px; }
-        .refresh-btn { float: right; margin-left: 10px; }
+        .delete-btn { position: absolute; top: 15px; right: 15px; background: transparent; border: none; color: #444; font-size: 18px; padding: 0; min-width: 0; }
+        .delete-btn:hover { color: #f44747; }
+        .refresh-btn { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,0.1); border: none; }
+        .refresh-btn:hover { background: rgba(255,255,255,0.2); color: white; border-color: transparent; }
     </style>
 </head>
 <body>
     <div class="container">
-        <button class="refresh-btn" onclick="refresh()">Refresh</button>
+        <button class="refresh-btn" onclick="refresh()">↻ Refresh</button>
         <h2>🚀 Antigravity Command Center</h2>
         <div class="status-row"><span>Status:</span><span id="bridge-status">Offline</span></div>
         <div class="status-row"><span>Gateway:</span><span id="token-status">-</span></div>
@@ -318,6 +369,8 @@ function getDashboardHtml() {
         function defineDuty(idx) { vscode.postMessage({ command: 'defineDuty', idx }); }
         function resetAll() { vscode.postMessage({ command: 'resetAll' }); }
         function relink(idx) { vscode.postMessage({ command: 'relink', idx }); }
+        function cancelRelink(idx) { vscode.postMessage({ command: 'cancelRelink', idx }); }
+        function deleteAgent(idx) { vscode.postMessage({ command: 'deleteAgent', idx }); }
         function copyInstructions() {
             if (!lastData) return;
             let agents = "";
@@ -340,16 +393,19 @@ function getDashboardHtml() {
                 const allIndices = new Set([...Object.keys(data.registry), ...Object.keys(data.names), ...Object.keys(data.duties)]);
                 Array.from(allIndices).sort((a,b) => parseInt(a)-parseInt(b)).forEach(idx => {
                     const id = data.registry[idx];
-                    const isRelinking = (data.relinkMode == idx) || (!id);
+                    const isRelinking = (data.relinkMode == idx);
+                    const anyRelinking = (data.relinkMode !== null);
                     list.innerHTML += \`
                         <div class="chat-item \${isRelinking ? 'relinking' : ''}">
+                            <button class="delete-btn" onclick="deleteAgent('\${idx}')">×</button>
                             <div class="chat-name">\${idx}: \${data.names[idx] || 'Agent'} \${isRelinking ? '(LISTENING...)' : ''}</div>
-                            <div class="chat-id">\${id || 'ID EMPTY — INTERACT IN CHAT'}</div>
+                            <div class="chat-id">\${id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED')}</div>
                             <div class="chat-duty">" \${data.duties[idx] || 'No role'} "</div>
                             <div class="actions">
                                 <button class="primary" onclick="rename('\${idx}')">Name</button>
                                 <button onclick="defineDuty('\${idx}')">Role</button>
-                                <button onclick="relink('\${idx}')">Relink</button>
+                                \${isRelinking ? \`<button class="warning" onclick="cancelRelink('\${idx}')">Cancel</button>\` 
+                                              : \`<button \${anyRelinking ? 'disabled' : ''} onclick="relink('\${idx}')">Relink</button>\`}
                             </div>
                         </div>\`;
                 });

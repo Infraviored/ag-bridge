@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════
-// ANTIGRAVITY BRIDGE SCRIPT v9 — Race-Condition Proof
+// ANTIGRAVITY BRIDGE SCRIPT v12 — No Blacklist (Pure Discovery)
 // ════════════════════════════════════════════════════════════
 const _origFetch = window.fetch;
 window.__origFetch = _origFetch;
@@ -8,6 +8,7 @@ window.__agCaptured = { history: [] };
 window.__chatRegistry = {};
 window.__chatNames = {};
 window.__relinkMode = null;
+window.__relinkOldId = null;
 
 window.fetch = async function (input, init, ...rest) {
   const url = (input instanceof Request ? input.url : input?.url ?? input) || '';
@@ -21,31 +22,39 @@ window.fetch = async function (input, init, ...rest) {
   }
 
   const handleId = (id) => {
-    // 1. Check if we are explicitly waiting to link a specific index
+    // 1. RELINK MODE
     if (window.__relinkMode !== null) {
+      if (id === window.__relinkOldId) return;
+
       const targetIdx = window.__relinkMode;
+      
+      Object.keys(window.__chatRegistry).forEach(k => {
+        if (window.__chatRegistry[k] === id && String(k) !== String(targetIdx)) {
+          window.__chatRegistry[k] = ""; 
+        }
+      });
+
       window.__chatRegistry[targetIdx] = id;
       console.log(`%c🔗 RELINK SUCCESS: [${targetIdx}] -> ${id}`, 'color:lime; font-weight:bold');
       window.__relinkMode = null;
+      window.__relinkOldId = null;
       return;
     }
 
-    // 2. Check if this ID is already known
+    // 2. AUTO-ASSIGNMENT
     if (Object.values(window.__chatRegistry).includes(id)) return;
 
-    // 3. Auto-assign to the first EMPTY slot (this catches indices that have names but no IDs)
     let foundSlot = false;
     const sortedIndices = Object.keys(window.__chatRegistry).map(Number).sort((a,b) => a-b);
     for (const idx of sortedIndices) {
       if (!window.__chatRegistry[idx] || window.__chatRegistry[idx] === "") {
         window.__chatRegistry[idx] = id;
-        console.log(`%c🎯 SLOT FILL: [${idx}] -> ${id}`, 'color:lime; font-weight:bold');
+        console.log(`%c🎯 AUTO-FILL: [${idx}] -> ${id}`, 'color:lime; font-weight:bold');
         foundSlot = true;
         break;
       }
     }
 
-    // 4. If no empty slot, append to end
     if (!foundSlot) {
       let nextIdx = 1;
       while (window.__chatRegistry[nextIdx]) nextIdx++;
@@ -115,11 +124,7 @@ window.activateStream = async (cascadeId) => {
   envelope.set(jsonBytes, 5);
   const res = await _origFetch(base, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/connect+json',
-      'connect-protocol-version': '1',
-      'x-codeium-csrf-token': csrf
-    },
+    headers: { 'content-type': 'application/connect+json', 'connect-protocol-version': '1', 'x-codeium-csrf-token': csrf },
     body: envelope
   });
   const reader = res.body.getReader();
@@ -170,7 +175,7 @@ window.postAndReadAuto = async (text, cascadeId, opts = {}, timeoutMs = 120000) 
           }
         }
         const steps = raw.filter((r, i) => !raw.some((other, j) => j > i && other.startsWith(r) && other.length > r.length));
-        resolve({ answer: allSteps ? steps.join('\n\n---\n\n') : (steps.at(-1) || ''), steps, files: [] });
+        resolve({ answer: allSteps ? steps.join('\n\n---\n\n') : (steps.at(-1) || ''), steps });
       }
       if (now - sentAt > timeoutMs) { clearInterval(iv); reject(new Error('Timeout')); }
     }, 400);
@@ -193,4 +198,4 @@ setInterval(() => {
     .catch(e => localStorage.setItem('__res_' + reqId, JSON.stringify({ answer: `ERROR: ${e}` })));
 }, 200);
 
-console.log('%c🚀 Bridge v9 — Race-Condition Proof READY', 'color:gold; font-weight:bold');
+console.log('%c🚀 Bridge v12 — Pure Discovery READY', 'color:gold; font-weight:bold');

@@ -1,16 +1,15 @@
 {
   "registry": {
     "1": "76493180-23e7-4fff-b99f-34bc25a4a4bd",
-    "2": "",
-    "3": "1efbea2c-6743-4291-88b5-e529d0634a71",
-    "4": "3af87b7e-efc6-45f8-a1f6-1cdc9271b10b"
+    "2": "1efbea2c-6743-4291-88b5-e529d0634a71"
   },
   "chatNames": {
-    "1": "dies",
-    "2": "heino"
+    "1": "Hermano",
+    "2": "Gustavo"
   },
-  "ts": 1777034129024,
+  "ts": 1777035723372,
   "chatDuties": {
-    "1": "Building AG Extension"
+    "1": "Extension Builder\\",
+    "2": "This is the backend agent"
   }
 }
