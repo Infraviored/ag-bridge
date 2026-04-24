@@ -428,11 +428,10 @@ function getDashboardHtml() {
                 '## AVAILABLE AGENTS:\\n' + agents + '\\n' +
                 '## CONTROL INTERFACE:\\n' +
                 '- Use \\\'agbridge <idx> "prompt"\\\' to delegate a task to a specific agent.\\n' +
-                '- Use \\\'agbridge <idx> "prompt" --all\\\' to retrieve the full execution history (multi-turn).\\n\\n' +
+                '- Use \\\'agbridge <idx> "prompt" --all\\\' for strict supervision. This retrieves the COMPLETE execution path, including all intermediate thoughts and tool calls. WARNING: This may blow the context window; use only when full transparency of the agent\\\'s path is required.\\n\\n' +
                 '## GUIDELINES:\\n' +
                 '1. DELEGATE tasks based on the specific duties listed above.\\n' +
-                '2. CHAIN operations by passing results from one agent to another.\\n' +
-                '3. PERSISTENCE is active; you do not need to re-explain context to an agent in the same session.';
+                '2. PERSISTENCE is active; you do not need to re-explain context to an agent in the same session.';
             
             navigator.clipboard.writeText(text).then(() => {
                 const btn = document.getElementById('copy-instr-btn');

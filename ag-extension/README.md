@@ -6,7 +6,6 @@ The Antigravity Bridge is designed to **break the browser sandbox**. It enables 
 Traditional AI chat interfaces are trapped behind a browser UI. This bridge transforms Antigravity into a **headless orchestration engine**. 
 *   **Delegate Tasks**: An external agent can spawn sub-tasks across multiple specialized Antigravity agents.
 *   **Deep Supervision**: Use the `--all` flag to audit the internal reasoning and tool-calling of Antigravity agents from your CLI.
-*   **Chain of Command**: Build complex workflows where a "Master Agent" in your terminal manages a team of Antigravity agents inside the IDE.
 
 ## 🛠 Prerequisites
 
