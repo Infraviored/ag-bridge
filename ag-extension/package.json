@@ -2,7 +2,7 @@
   "name": "ag-bridge-extension",
   "displayName": "Antigravity Bridge",
   "description": "Automates bridge injection and communication with Antigravity",
-  "version": "1.0.2",
+  "version": "1.3.0",
   "publisher": "infraviored",
   "repository": {
     "type": "git",
@@ -39,12 +39,14 @@
     "test": "node ./out/test/runTest.js"
   },
   "devDependencies": {
-    "@types/vscode": "^1.80.0",
     "@types/node": "20.x",
+    "@types/vscode": "^1.80.0",
     "@types/ws": "^8.5.10",
     "typescript": "^5.1.3"
   },
   "dependencies": {
+    "@vscode/vsce": "^2.15.0",
+    "vsce": "^1.103.1",
     "ws": "^8.18.0"
   }
 }

@@ -1,10 +1,14 @@
 {
   "registry": {
-    "1": "76493180-23e7-4fff-b99f-34bc25a4a4bd"
+    "1": "76493180-23e7-4fff-b99f-34bc25a4a4bd",
+    "2": "1efbea2c-6743-4291-88b5-e529d0634a71"
   },
   "chatNames": {
     "1": "dies",
     "2": "heino"
   },
-  "ts": 1777025656148
+  "ts": 1777026082016,
+  "chatDuties": {
+    "1": "Building AG Extension"
+  }
 }
