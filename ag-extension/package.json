@@ -2,7 +2,7 @@
   "name": "ag-bridge-extension",
   "displayName": "Antigravity Bridge",
   "description": "Automates bridge injection and communication with Antigravity",
-  "version": "1.8.4",
+  "version": "1.8.6",
   "publisher": "infraviored",
   "repository": {
     "type": "git",
@@ -39,8 +39,13 @@
         },
         "antigravity.bridge.timeout": {
           "type": "number",
-          "default": 60000,
-          "description": "Silence timeout in milliseconds before resolving the agent response (default: 1 minute)."
+          "default": 3,
+          "description": "Silence timeout in MINUTES before resolving the agent response (default: 1 minute)."
+        },
+        "antigravity.bridge.cliTimeout": {
+          "type": "number",
+          "default": 10,
+          "description": "Total CLI timeout in MINUTES for the agbridge command (default: 10 minutes)."
         }
       }
     }

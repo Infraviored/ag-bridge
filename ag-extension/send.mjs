@@ -62,4 +62,11 @@ ws.on('open', () => {
   });
 });
 ws.on('error', e => { console.error(`WebSocket Fehler: ${e.message}`); process.exit(1); });
-setTimeout(() => { console.error('Timeout'); process.exit(1); }, 90000);
+// Load timeout from config if available (minutes to ms)
+let cliTimeoutMinutes = 10;
+try {
+  const config = JSON.parse(readFileSync('./ag-config.json', 'utf8'));
+  if (config.cliTimeout) cliTimeoutMinutes = config.cliTimeout;
+} catch (e) { }
+
+setTimeout(() => { console.error('Timeout'); process.exit(1); }, cliTimeoutMinutes * 60 * 1000);

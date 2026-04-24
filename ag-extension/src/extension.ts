@@ -15,6 +15,12 @@ let lastLogIndex = 0;
 let isPolling = false;
 let lastHeartbeat = 0;
 
+enum BridgeState {
+    MissingRDP,
+    PromptOnce,
+    Active
+}
+
 function logToChannel(msg: string) {
     if (!outputChannel) {
         outputChannel = vscode.window.createOutputChannel("Antigravity Bridge");
@@ -41,7 +47,9 @@ function loadConfig(): any {
 
 function saveConfig(config: any) {
     const configPath = getConfigPath();
+    const cliTimeout = vscode.workspace.getConfiguration('antigravity.bridge').get('cliTimeout', 10);
     config.ts = Date.now();
+    config.cliTimeout = cliTimeout;
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 }
 
@@ -94,7 +102,7 @@ async function injectBridge() {
     try {
         const tab = await getAntigravityTab();
         if (!tab) {
-            updateStatusBar(false);
+            updateStatusBar(BridgeState.MissingRDP);
             return;
         }
         const scriptPath = path.join(__dirname, '..', 'dist', 'bridge.js');
@@ -104,12 +112,14 @@ async function injectBridge() {
 
         const config = loadConfig();
         const verbose = vscode.workspace.getConfiguration('antigravity.bridge').get('verbose', false);
-        const timeout = vscode.workspace.getConfiguration('antigravity.bridge').get('timeout', 60000);
+        const timeoutMinutes = vscode.workspace.getConfiguration('antigravity.bridge').get('timeout', 1);
+        const timeoutMs = timeoutMinutes * 60 * 1000;
+        
         const syncScript = `
             Object.assign(window.__chatRegistry, ${JSON.stringify(config.registry || {})});
             Object.assign(window.__chatNames, ${JSON.stringify(config.chatNames || {})});
             window.__agVerbose = ${verbose};
-            window.__agTimeout = ${timeout};
+            window.__agTimeout = ${timeoutMs};
         `;
 
         const ws = new WebSocket(tab.webSocketDebuggerUrl);
@@ -125,32 +135,43 @@ async function injectBridge() {
             if (msg.id === 1) {
                 ws.close();
                 bridgeActive = true;
-                updateStatusBar(true);
                 logToChannel("✨ Bridge successfully injected into browser.");
+                // Let the poll loop take over status bar from here
             }
         });
         ws.on('error', (e) => {
             logToChannel(`[ERROR] Injection WebSocket error: ${e.message}`);
-            updateStatusBar(false);
+            updateStatusBar(BridgeState.MissingRDP);
         });
     } catch (e) {
-        updateStatusBar(false);
+        updateStatusBar(BridgeState.MissingRDP);
     }
 }
 
-function updateStatusBar(active: boolean) {
+function updateStatusBar(state: BridgeState) {
     if (!statusBarItem) {
         statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
         statusBarItem.show();
     }
-    if (active) {
-        statusBarItem.text = '$(zap) AG Bridge Active';
-        statusBarItem.command = 'agbridge.showDashboard';
-        statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
-    } else {
-        statusBarItem.text = '$(circle-slash) AG Bridge Inactive';
-        statusBarItem.command = 'agbridge.inject';
-        statusBarItem.backgroundColor = undefined;
+    
+    statusBarItem.command = 'agbridge.showDashboard';
+    statusBarItem.backgroundColor = undefined;
+
+    switch (state) {
+        case BridgeState.MissingRDP:
+            statusBarItem.text = '$(error) AG-Bridge: Missing RDP';
+            statusBarItem.tooltip = 'Antigravity must be launched with --remote-debugging-port=9222. Please restart the IDE with debugging enabled.';
+            statusBarItem.command = 'agbridge.inject'; // Allow retry
+            break;
+        case BridgeState.PromptOnce:
+            statusBarItem.text = '$(question) AG-Bridge: Prompt Once';
+            statusBarItem.tooltip = 'Remote debugging port is open, but no context has been captured. Please send one manual message in Antigravity Chat to prime the bridge.';
+            break;
+        case BridgeState.Active:
+            statusBarItem.text = '$(zap) AG-Bridge: Active';
+            statusBarItem.tooltip = 'Bridge is active and context is captured. External agents can now orchestrate this window.';
+            statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
+            break;
     }
 }
 
@@ -460,20 +481,48 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(outputChannel);
     context.subscriptions.push(vscode.commands.registerCommand('agbridge.inject', () => injectBridge()));
     context.subscriptions.push(vscode.commands.registerCommand('agbridge.showDashboard', () => showDashboard()));
-    updateStatusBar(false);
+    
     injectBridge().catch(() => {});
     
-    // Background polling for logs
+    // Background polling for logs and status
     setInterval(async () => {
         if (isPolling) return;
         isPolling = true;
         
         try {
             const tab = await getAntigravityTab();
-            if (tab) {
-                await updateDashboard();
+            if (!tab) {
+                updateStatusBar(BridgeState.MissingRDP);
+            } else {
+                // Check for captured context
+                const ws = new WebSocket(tab.webSocketDebuggerUrl);
+                ws.on('open', () => {
+                    ws.send(JSON.stringify({
+                        id: 200,
+                        method: 'Runtime.evaluate',
+                        params: { expression: '!!window.__agCaptured?.last' }
+                    }));
+                });
+                ws.on('message', (data: WebSocket.Data) => {
+                    const msg = JSON.parse(data.toString());
+                    if (msg.id === 200) {
+                        const captured = msg.result?.result?.value;
+                        updateStatusBar(captured ? BridgeState.Active : BridgeState.PromptOnce);
+                        ws.close();
+                    }
+                });
+                ws.on('error', () => {
+                    updateStatusBar(BridgeState.MissingRDP);
+                    ws.close();
+                });
+
+                if (dashboardPanel) {
+                    await updateDashboard();
+                }
             }
-        } catch (e) {}
+        } catch (e) {
+            updateStatusBar(BridgeState.MissingRDP);
+        }
         isPolling = false;
     }, 2000);
 }
