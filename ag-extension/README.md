@@ -1,42 +1,50 @@
-# Antigravity Bridge Extension
+# Antigravity Bridge: Unlimited Agent Orchestration (v1.4.0)
 
-Automatisches Injizieren und Steuern des Antigravity Chats aus VS Code.
+The Antigravity Bridge is designed to **break the browser sandbox**. It enables external, terminal-based agents (such as the Cloud Code Agent) to command, orchestrate, and supervise the full cognitive power of Antigravity Chat agents via a standardized CLI.
 
-## Voraussetzungen
+## 🔓 Unlimited Freedom
+Traditional AI chat interfaces are trapped behind a browser UI. This bridge transforms Antigravity into a **headless orchestration engine**. 
+*   **Delegate Tasks**: An external agent can spawn sub-tasks across multiple specialized Antigravity agents.
+*   **Deep Supervision**: Use the `--all` flag to audit the internal reasoning and tool-calling of Antigravity agents from your CLI.
+*   **Chain of Command**: Build complex workflows where a "Master Agent" in your terminal manages a team of Antigravity agents inside the IDE.
 
-Antigravity muss mit dem Remote Debugging Port gestartet werden:
+## 🛠 Prerequisites
+
+### 1. Remote Debugging Port
+Antigravity must be launched with the remote debugging port enabled:
 ```bash
-./antigravity --remote-debugging-port=9222
+antigravity --remote-debugging-port=9222
 ```
 
-## Features
+### 2. Standardized Launcher (Recommended)
+Use the symmetrical `.desktop` launcher provided in `~/links/local_applications/antigravity.desktop`. It automatically enables the debug port for both Profile A and B.
 
-- **Auto-Inject**: Injiziert das Bridge-Script automatisch beim Start von VS Code.
-- **Status Dashboard**: Eine moderne Webansicht zur Überwachung von Verbindung, CSRF-Token und Chats.
-- **Persistent Naming & Duties**: Speichere Namen und Verantwortlichkeiten für deine Agenten projektbezogen.
-- **Global CLI**: Steuere deine Chats direkt aus dem Terminal mit `agbridge`.
+### 3. CLI PATH Requirement
+The `agbridge` command is installed to `~/.local/bin/`. Ensure this is in your `$PATH`.
 
-## Global CLI (agbridge)
+## 💻 The Power Command: `agbridge`
 
-Die Extension installiert automatisch einen globalen Command `agbridge` in `~/.local/bin/`. Damit kannst du den Chat direkt aus jedem Terminal steuern:
+Command syntax: `agbridge <index|name> "your prompt" [--all]`
 
-```bash
-# Einfache Nachricht
-agbridge 1 "Wie geht es dir?"
+### Interaction Modes:
+- **Standard (Fast)**: `agbridge 1 "..."` 
+  - Returns only the final result. Best for data retrieval or quick checks.
+- **Supervised (Deep)**: `agbridge 1 "..." --all` 
+  - **Full Transparency**: Streams every thought, tool call, and browser interaction. 
+  - This allows an external agent to "watch the hands" of the Antigravity agent during complex operations.
 
-# Volle Logs (Tool-Calls, Gedanken, Browser-Aktionen)
-agbridge 1 "Analysiere den Code" --all
-```
+## 📊 Dashboard & Command Center
 
-## Dashboard Features
+The VS Code dashboard acts as your orchestration hub:
+- **Registry**: Map human-readable names and specific "Duties" (responsibilities) to each chat instance.
+- **Orchestration Prompt**: Generate a pre-formatted instruction set for external agents, telling them exactly how to command the local bridge.
 
-- **Relinking**: Erkennt automatisch Chats aus Projekten wieder (via `ag-config.json`).
-- **Duties**: Weise jedem Agenten eine feste Aufgabe zu ("Backend Specialist", etc.).
-- **Copy Instructions**: Generiert einen fertigen Prompt für andere KI-Agenten, damit diese wissen, wie sie die Bridge über das Terminal steuern können.
+## 📝 The Workflow
 
-## Verwendung
+1.  **Launch** Antigravity with port 9222.
+2.  **Activate** the extension in VS Code and open the Dashboard (Zap Icon).
+3.  **Prime** the connection by sending one manual message in any Antigravity chat.
+4.  **Unleash**: Use your external CLI agent to command the bridge.
 
-1. Antigravity mit Port 9222 starten.
-2. Diese Extension laden/aktivieren.
-3. Klicke auf den Statusbar-Button "AG Bridge Inactive" zum ersten Inject.
-4. Nutze das Dashboard (Zap-Icon in der Statusbar) zum Verwalten der Chats.
+---
+*Built for the age of agentic collaboration. Break the UI. Command the terminal.*
