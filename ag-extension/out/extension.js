@@ -140,7 +140,7 @@ async function injectBridge() {
             updateStatusBar(false);
             return;
         }
-        const scriptPath = path.join(__dirname, 'bridge.js');
+        const scriptPath = path.join(__dirname, '..', 'dist', 'bridge.js');
         const finalScriptPath = fs.existsSync(scriptPath) ? scriptPath : path.join(__dirname, '..', 'src', 'bridge.js');
         if (!fs.existsSync(finalScriptPath))
             return;
@@ -440,11 +440,23 @@ function getDashboardHtml() {
         function copyInstructions() {
             if (!lastData) return;
             let agents = "";
-            Object.keys(lastData.registry).forEach(idx => { agents += \`- [\${idx}]: \${lastData.names[idx] || 'Agent'} (Role: \${lastData.duties[idx] || 'GenInt'})\\n\`; });
-            const text = \`# Antigravity Orchestration\\nAgents:\\n\${agents}\\n\\nCommand: agbridge <idx> "prompt" [--all]\`;
+            Object.keys(lastData.registry).forEach(idx => { 
+                agents += '- [Agent ' + idx + ']: ' + (lastData.names[idx] || 'Agent') + ' (Primary Duty: ' + (lastData.duties[idx] || 'General Intelligence') + ')\\n'; 
+            });
+            const text = '# ANTIGRAVITY ORCHESTRATION PROTOCOL\\n\\n' +
+                'You are an orchestrator with access to specialized sub-agents via the \\\'agbridge\\\' CLI. Each agent maintains a persistent, context-aware session.\\n\\n' +
+                '## AVAILABLE AGENTS:\\n' + agents + '\\n' +
+                '## CONTROL INTERFACE:\\n' +
+                '- Use \\\'agbridge <idx> "prompt"\\\' to delegate a task to a specific agent.\\n' +
+                '- Use \\\'agbridge <idx> "prompt" --all\\\' to retrieve the full execution history (multi-turn).\\n\\n' +
+                '## GUIDELINES:\\n' +
+                '1. DELEGATE tasks based on the specific duties listed above.\\n' +
+                '2. CHAIN operations by passing results from one agent to another.\\n' +
+                '3. PERSISTENCE is active; you do not need to re-explain context to an agent in the same session.';
+            
             navigator.clipboard.writeText(text).then(() => {
                 const btn = document.getElementById('copy-instr-btn');
-                btn.innerText = "✅ Copied!";
+                btn.innerText = "✅ Protocol Copied!";
                 setTimeout(() => btn.innerText = "📋 Copy Delegation Prompt", 2000);
             });
         }

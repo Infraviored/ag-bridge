@@ -1,6 +1,4 @@
-// ════════════════════════════════════════════════════════════
-// ANTIGRAVITY BRIDGE SCRIPT v18 — 5s Patience & Stream-Done
-// ════════════════════════════════════════════════════════════
+// ANTIGRAVITY BRIDGE SCRIPT v24 — DETERMINISTIC DUMP
 const _origFetch = window.fetch;
 window.__origFetch = _origFetch;
 
@@ -8,148 +6,194 @@ window.__agLogs = window.__agLogs || [];
 window.__agReadLog = window.__agReadLog || [];
 window.__chatRegistry = window.__chatRegistry || {};
 window.__chatNames = window.__chatNames || {};
-window.__relinkMode = null;
-window.__relinkOldId = null;
+window.__activeReaders = {};
+window.__activeStreamCount = 0;
+window.__cmdActive = false;
 
-function log(msg) {
+// ── VERBOSE LOGGING ─────────────────────────────────────────
+function log(msg, level = 'info') {
     const entry = { ts: Date.now(), msg: `[BRIDGE] ${msg}` };
     window.__agLogs.push(entry);
-    console.log(`%c${entry.msg}`, "color:gold");
+    const styles = {
+        info: 'color:gold',
+        warn: 'color:orange; font-weight:bold',
+        error: 'color:white; background:red; font-weight:bold; padding: 2px 4px',
+        success: 'color:lime; font-weight:bold',
+        debug: 'color:cyan; font-size: 10px',
+        term: 'color:red; font-weight:heavy; font-size: 14px; text-decoration: underline'
+    };
+    console.log(`%c${entry.msg}`, styles[level] || styles.info);
 }
 
+console.log('%c🚀 Bridge v22 loaded — TOTAL VISIBILITY ACTIVE', 'color:magenta; font-weight:bold; font-size:14px');
+
+// ── FETCH WRAPPER (Passive Tap) ─────────────────────────────
 window.fetch = async function(...args) {
-    const url = args[0]?.toString() || "";
+    const urlStr = args[0]?.toString() || "";
     const res = await _origFetch.apply(this, arguments);
 
-    if (url.includes('StreamAgentStateUpdates')) {
+    if (urlStr.includes('StreamAgentStateUpdates')) {
+        window.__activeStreamCount++;
+        log(`🌊 [PASSIVE] Stream Tap Started (#${window.__activeStreamCount})`, 'info');
+        
         const cloned = res.clone();
         const reader = cloned.body.getReader();
         const decoder = new TextDecoder();
-        
-        // Track stream state globally for postAndReadAuto to see
-        window.__activeStreamDone = false;
 
         (async () => {
             try {
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) {
-                        window.__activeStreamDone = true;
+                        log(`🏁 [PASSIVE] STREAM-DONE (Server Closed)`, 'term');
+                        window.__activeStreamCount--;
                         break;
                     }
                     const chunk = decoder.decode(value, { stream: true });
-                    window.__agReadLog.push({
-                        ts: Date.now(),
-                        url: url,
-                        payload: chunk
-                    });
+                    window.__agReadLog.push({ ts: Date.now(), source: 'passive', payload: chunk });
+                    // Instant peek for the user
+                    if (chunk.includes('modifiedResponse')) {
+                        log(`📝 [PASSIVE] Data: ${chunk.match(/"modifiedResponse":"((?:[^"\\]|\\.)*)"/)?.[1]?.slice(0,60)}...`, 'debug');
+                    }
                 }
-            } catch (e) {
-                log(`Stream Read Error: ${e.message}`);
-                window.__activeStreamDone = true;
+            } catch (e) { 
+                log(`❌ [PASSIVE] Stream Error: ${e.message}`, 'error');
+                window.__activeStreamCount--;
             }
         })();
     }
 
-    if (url.includes('SendUserCascadeMessage')) {
+    if (urlStr.includes('SendUserCascadeMessage')) {
         const body = args[1]?.body;
         if (body) {
             try {
                 const text = typeof body === 'string' ? body : await (new Response(body)).text();
-                const json = JSON.parse(text);
-                const cascadeId = json.cascadeId;
-                const headers = args[1]?.headers || {};
-                
                 window.__agCaptured = {
                     last: Date.now(),
-                    cascadeId,
-                    headers: {
-                        'x-codeium-csrf-token': headers['x-codeium-csrf-token'],
-                        'cookie': headers['cookie']
-                    }
+                    url: urlStr,
+                    headers: args[1]?.headers || {},
+                    bodyTemplate: JSON.parse(text)
                 };
-                log(`📡 CAPTURE: Headers & CascadeId (${cascadeId}) captured.`);
+                log(`📡 [CAPTURE] Endpoint & Headers secured.`, 'success');
             } catch (e) {}
         }
     }
     return res;
 };
 
+// ── PROACTIVE STREAM (v5 Style) ─────────────────────────────
+// ── POST AND READ (The "8s Silence" Logic) ────────────────
 window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
-    const sentAt = Date.now();
-    log(`🚀 POST: "${prompt.slice(0,30)}..." to ${cascadeId}`);
+    const c = window.__agCaptured;
+    if (!c) throw new Error("No context captured. Type one message manually.");
 
-    if (!window.__agCaptured?.headers) {
-        throw new Error("No security headers captured. Type one message in any chat manually.");
-    }
+    log(`🧹 Purging old chunks for cascade ${cascadeId.slice(0,8)}...`);
+    window.__agReadLog = window.__agReadLog.filter(x => !x.payload?.includes(cascadeId));
 
-    const res = await _origFetch('https://www.antigravity.com/api/SendUserCascadeMessage', {
+    log(`🚀 DISPATCH: "${prompt.slice(0,40)}..."`, 'info');
+    const payload = { ...c.bodyTemplate, cascadeId, items: [{ text: prompt }], sentAt: new Date().toISOString() };
+    
+    const res = await _origFetch(c.url, {
         method: 'POST',
-        headers: {
-            ...window.__agCaptured.headers,
-            'content-type': 'application/json'
-        },
-        body: JSON.stringify({
-            cascadeId: cascadeId,
-            text: prompt,
-            sentAt: new Date().toISOString()
-        })
+        headers: c.headers,
+        body: JSON.stringify(payload)
     });
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`POST Failed: ${res.status}`);
 
-    let lastRunningTs = 0;
-    let lastIdleTs = 0;
-    let lastChunkTs = 0;
-    const timeoutMs = 90000;
+    const sentAt = Date.now();
+    log(`📬 POST OK. Entering Silence Watch (sentAt=${sentAt})...`, 'info');
+
+    let lastRunningTs = 0, lastIdleTs = 0, lastChunkTs = 0;
+    const timeoutMs = 120000;
+    const SILENCE_MS = 8000;
 
     return new Promise((resolve, reject) => {
         const iv = setInterval(() => {
             const now = Date.now();
-            
-            const newChunks = window.__agReadLog.filter(x => 
-                x.ts >= sentAt && 
-                x.url?.includes('StreamAgentStateUpdates') &&
-                x.payload?.includes(cascadeId)
-            );
+            const relevant = window.__agReadLog.filter(x => x.ts >= sentAt && x.payload?.includes(cascadeId));
 
-            for (const ch of newChunks) {
+            for (const ch of relevant) {
                 lastChunkTs = Math.max(lastChunkTs, ch.ts);
                 if (ch.payload.includes('"CASCADE_RUN_STATUS_RUNNING"')) lastRunningTs = ch.ts;
-                if (ch.payload.includes('"CASCADE_RUN_STATUS_IDLE"')) lastIdleTs = ch.ts;
+                if (ch.payload.includes('"CASCADE_RUN_STATUS_IDLE"'))    lastIdleTs = ch.ts;
             }
 
-            // PATIENCE RULES:
             const isIdle = lastIdleTs > 0 && lastIdleTs >= lastRunningTs;
-            const hasPatience = (now - lastChunkTs > 5000); // 5s Patience
-            const isStreamDone = window.__activeStreamDone === true;
+            const silenceTime = lastChunkTs > 0 ? (now - lastChunkTs) : (now - sentAt);
+            const canResolve = isIdle && (silenceTime > SILENCE_MS);
 
-            // Resolve IF: (Idle AND 5s passed) OR (Server closed the stream)
-            if ((isIdle && hasPatience) || (isIdle && isStreamDone)) {
+            if ((now - sentAt) % 2500 < 600) {
+                const state = lastRunningTs > lastIdleTs ? 'RUNNING' : (lastIdleTs > 0 ? 'IDLE' : 'WAITING');
+                log(`⏳ HEARTBEAT: Chunks=${relevant.length} | State=${state} | Silence=${(silenceTime/1000).toFixed(1)}s/${SILENCE_MS/1000}s`, 'debug');
+            }
+
+            if (canResolve) {
                 clearInterval(iv);
-                
-                const fullText = newChunks.map(x => x.payload).join('');
+                const fullText = relevant.map(x => x.payload).join('');
                 const matches = [...fullText.matchAll(/"(?:modifiedResponse|text)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)];
+                const raw = matches.map(m => m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
                 
-                const raw = matches.map(m => m[1]
-                    .replace(/\\n/g, '\n')
-                    .replace(/\\"/g, '"')
-                    .replace(/\\\\/g, '\\')
-                );
+                // 🏁 TRIPLE DUMP (Deterministic Inspection)
+                if (relevant.length > 0) {
+                    log(`🏁 --- TRIPLE DUMP START (Total Chunks: ${relevant.length}) ---`, 'warn');
+                    log(`[1/3] FIRST CHUNK:\n${relevant[0].payload}`, 'debug');
+                    if (relevant.length > 2) {
+                        log(`[2/3] PENULTIMATE CHUNK:\n${relevant.at(-2).payload}`, 'debug');
+                    }
+                    log(`[3/3] FINAL CHUNK:\n${relevant.at(-1).payload}`, 'debug');
+                    log(`🏁 --- TRIPLE DUMP END ---`, 'warn');
+                }
 
-                const steps = raw.filter((r, i) => 
-                    !raw.some((other, j) => j > i && other.startsWith(r) && other.length > r.length)
-                );
-
+                const steps = raw.filter((r, i) => !raw.some((other, j) => j > i && other.startsWith(r) && other.length > r.length));
                 const finalAnswer = allSteps ? steps.join('\n\n---\n\n') : (steps.at(-1) || '');
-                log(`✅ COMPLETE: Captured ${steps.length} steps. ${isStreamDone ? '(Stream-Done)' : '(Silence-Timeout)'}`);
+                log(`✅ RESOLVED: ${steps.length} steps captured.`, 'success');
                 resolve(finalAnswer);
             }
 
             if (now - sentAt > timeoutMs) {
                 clearInterval(iv);
-                reject(new Error("Response Timeout (90s)"));
+                log(`❌ TIMEOUT (120s): Total chunks=${relevant.length}, lastIdle=${lastIdleTs>0}`, 'error');
+                reject(new Error(`Timeout. Chunks: ${relevant.length}`));
             }
         }, 500);
     });
+};
+
+// ── COMMAND DISPATCHER ──────────────────────────────────────
+(function startCommandDispatcher() {
+    log('📡 Dispatcher standing by.', 'info');
+    setInterval(() => {
+        const raw = localStorage.getItem('__cmd');
+        if (!raw || window.__cmdActive) return;
+        localStorage.removeItem('__cmd');
+        window.__cmdActive = true;
+        const cmd = JSON.parse(raw);
+        const { chatIndex, text, reqId, opts } = cmd;
+        const cascadeId = window.__chatRegistry[chatIndex];
+        if (!cascadeId) {
+            localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer: `ERROR: No chat ${chatIndex}` }));
+            window.__cmdActive = false;
+            return;
+        }
+        window.postAndReadAuto(text, cascadeId, opts?.all || false)
+            .then(answer => {
+                localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer }));
+                window.__cmdActive = false;
+            })
+            .catch(err => {
+                localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer: `ERROR: ${err.message}` }));
+                window.__cmdActive = false;
+            });
+    }, 300);
+})();
+
+// ── DIAGNOSTIC TOOL ─────────────────────────────────────────
+window.dumpBridge = () => {
+    console.table(window.__agReadLog.slice(-20).map(x => ({
+        time: new Date(x.ts).toLocaleTimeString(),
+        src: x.source,
+        len: x.payload.length,
+        data: x.payload.slice(0, 100)
+    })));
 };

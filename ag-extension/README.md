@@ -1,4 +1,4 @@
-# Antigravity Bridge: Unlimited Agent Orchestration (v1.4.0)
+# Antigravity Bridge: Unlimited Agent Orchestration
 
 The Antigravity Bridge is designed to **break the browser sandbox**. It enables external, terminal-based agents (such as the Cloud Code Agent) to command, orchestrate, and supervise the full cognitive power of Antigravity Chat agents via a standardized CLI.
 

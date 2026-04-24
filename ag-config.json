@@ -1,15 +1,12 @@
 {
   "registry": {
-    "1": "76493180-23e7-4fff-b99f-34bc25a4a4bd",
-    "2": "1efbea2c-6743-4291-88b5-e529d0634a71"
+    "1": "76493180-23e7-4fff-b99f-34bc25a4a4bd"
   },
   "chatNames": {
-    "1": "Hermano",
-    "2": "Gustavo"
+    "1": "Hermano"
   },
-  "ts": 1777035723372,
+  "ts": 1777052369429,
   "chatDuties": {
-    "1": "Extension Builder\\",
-    "2": "This is the backend agent"
+    "1": "Extension Builder -- build full ag extension"
   }
 }

@@ -2,7 +2,8 @@
 set -e
 cd "$(dirname "$0")"
 
-echo "🚀 Starting Antigravity Bridge Build (v$(node -p "require('./package.json').version"))..."
+VERSION=$(node -p "require('./package.json').version")
+echo "🚀 Starting Antigravity Bridge Build (v$VERSION)..."
 
 # 1. Compile TypeScript
 echo "🔨 Compiling TypeScript..."
@@ -23,6 +24,7 @@ fi
 
 # 4. Package to VSIX
 echo "📦 Packaging VSIX..."
+rm -f ag-bridge-extension.vsix
 ./node_modules/.bin/vsce package --out ag-bridge-extension.vsix
 
 # 5. Install
