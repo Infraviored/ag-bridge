@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════
-// ANTIGRAVITY BRIDGE SCRIPT v12 — No Blacklist (Pure Discovery)
+// ANTIGRAVITY BRIDGE SCRIPT v14 — Connect Frame Stripping
 // ════════════════════════════════════════════════════════════
 const _origFetch = window.fetch;
 window.__origFetch = _origFetch;
@@ -9,6 +9,25 @@ window.__chatRegistry = {};
 window.__chatNames = {};
 window.__relinkMode = null;
 window.__relinkOldId = null;
+
+// Helper to strip Connect protocol framing (1 byte type + 4 bytes length)
+function stripConnectFraming(buffer) {
+  const chunks = [];
+  let offset = 0;
+  while (offset + 5 <= buffer.length) {
+    const len = new DataView(buffer.buffer, buffer.byteOffset + offset + 1, 4).getUint32(0, false);
+    if (offset + 5 + len <= buffer.length) {
+      chunks.push(new TextDecoder().decode(buffer.slice(offset + 5, offset + 5 + len)));
+      offset += 5 + len;
+    } else {
+      // Partial frame at end of buffer
+      break;
+    }
+  }
+  // If we couldn't find a 5-byte header, just decode the whole thing as fallback
+  if (chunks.length === 0 && buffer.length > 0) return new TextDecoder().decode(buffer);
+  return chunks.join('');
+}
 
 window.fetch = async function (input, init, ...rest) {
   const url = (input instanceof Request ? input.url : input?.url ?? input) || '';
@@ -22,28 +41,21 @@ window.fetch = async function (input, init, ...rest) {
   }
 
   const handleId = (id) => {
-    // 1. RELINK MODE
     if (window.__relinkMode !== null) {
       if (id === window.__relinkOldId) return;
-
       const targetIdx = window.__relinkMode;
-      
       Object.keys(window.__chatRegistry).forEach(k => {
         if (window.__chatRegistry[k] === id && String(k) !== String(targetIdx)) {
           window.__chatRegistry[k] = ""; 
         }
       });
-
       window.__chatRegistry[targetIdx] = id;
       console.log(`%c🔗 RELINK SUCCESS: [${targetIdx}] -> ${id}`, 'color:lime; font-weight:bold');
       window.__relinkMode = null;
       window.__relinkOldId = null;
       return;
     }
-
-    // 2. AUTO-ASSIGNMENT
     if (Object.values(window.__chatRegistry).includes(id)) return;
-
     let foundSlot = false;
     const sortedIndices = Object.keys(window.__chatRegistry).map(Number).sort((a,b) => a-b);
     for (const idx of sortedIndices) {
@@ -54,7 +66,6 @@ window.fetch = async function (input, init, ...rest) {
         break;
       }
     }
-
     if (!foundSlot) {
       let nextIdx = 1;
       while (window.__chatRegistry[nextIdx]) nextIdx++;
@@ -69,11 +80,11 @@ window.fetch = async function (input, init, ...rest) {
       (async () => {
         try {
           const reader = cloned.body.getReader();
-          const dec = new TextDecoder();
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            const m = dec.decode(value, { stream: true }).match(/"conversationId"\s*:\s*"([a-f0-9-]{36})"/);
+            const decoded = stripConnectFraming(value);
+            const m = decoded.match(/"conversationId"\s*:\s*"([a-f0-9-]{36})"/);
             if (m) handleId(m[1]);
           }
         } catch { }
@@ -129,19 +140,18 @@ window.activateStream = async (cascadeId) => {
   });
   const reader = res.body.getReader();
   (async () => {
-    const dec = new TextDecoder();
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        window.__agReadLog.push({ kind: 'fetch-chunk', url: base, chunk: dec.decode(value, { stream: true }), ts: Date.now() });
+        window.__agReadLog.push({ kind: 'fetch-chunk', url: base, payload: stripConnectFraming(value), ts: Date.now() });
       }
     } catch { }
   })();
   return new Promise(resolve => {
     const t0 = Date.now();
     const check = setInterval(() => {
-      const has = window.__agReadLog.some(x => x.kind === 'fetch-chunk' && x.url?.includes('StreamAgentStateUpdates') && x.chunk.includes(cascadeId) && x.ts > t0);
+      const has = window.__agReadLog.some(x => x.kind === 'fetch-chunk' && x.url?.includes('StreamAgentStateUpdates') && x.payload.includes(cascadeId) && x.ts > t0);
       if (has || Date.now() - t0 > 4000) { clearInterval(check); resolve(); }
     }, 100);
   });
@@ -149,7 +159,7 @@ window.activateStream = async (cascadeId) => {
 
 window.postAndReadAuto = async (text, cascadeId, opts = {}, timeoutMs = 120000) => {
   const allSteps = opts.all === true;
-  window.__agReadLog = window.__agReadLog.filter(x => !x.chunk?.includes(cascadeId));
+  window.__agReadLog = window.__agReadLog.filter(x => !x.payload?.includes(cascadeId));
   await window.activateStream(cascadeId);
   const sentAt = Date.now();
   await window.postToChat(cascadeId, text);
@@ -157,22 +167,22 @@ window.postAndReadAuto = async (text, cascadeId, opts = {}, timeoutMs = 120000) 
     let lastRunningTs = 0, lastIdleTs = 0, lastContentTs = 0;
     const iv = setInterval(() => {
       const now = Date.now();
-      const newChunks = window.__agReadLog.filter(x => x.kind === 'fetch-chunk' && x.ts >= sentAt && x.chunk?.includes(cascadeId));
-      for (const ch of newChunks) {
-        if (ch.chunk.includes('"CASCADE_RUN_STATUS_RUNNING"')) lastRunningTs = ch.ts;
-        if (ch.chunk.includes('"CASCADE_RUN_STATUS_IDLE"')) lastIdleTs = ch.ts;
-        if (ch.chunk.includes('"modifiedResponse"') || ch.chunk.includes('"text"')) lastContentTs = ch.ts;
-      }
+      const newChunks = window.__agReadLog.filter(x => x.kind === 'fetch-chunk' && x.ts >= sentAt && x.payload?.includes(cascadeId));
+      const fullBuffer = newChunks.map(c => c.payload).join('');
+      
+      if (fullBuffer.includes('"CASCADE_RUN_STATUS_RUNNING"')) lastRunningTs = now;
+      if (fullBuffer.includes('"CASCADE_RUN_STATUS_IDLE"')) lastIdleTs = now;
+      
+      const matches = [...fullBuffer.matchAll(/"(?:modifiedResponse|text)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)];
+      if (matches.length > 0) lastContentTs = now;
+
       if (lastIdleTs > 0 && lastIdleTs >= lastRunningTs && (now - lastContentTs > 2000) && (now - lastIdleTs > 1500)) {
         clearInterval(iv);
         const raw = [];
         const seen = new Set();
-        for (const ch of newChunks) {
-          const matches = [...ch.chunk.matchAll(/"(?:modifiedResponse|text)":"((?:[^"\\]|\\.)*)"/g)];
-          for (const m of matches) {
-            const r = m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-            if (r.trim() && !seen.has(r)) { seen.add(r); raw.push(r); }
-          }
+        for (const m of matches) {
+           const r = m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+           if (r.trim() && !seen.has(r)) { seen.add(r); raw.push(r); }
         }
         const steps = raw.filter((r, i) => !raw.some((other, j) => j > i && other.startsWith(r) && other.length > r.length));
         resolve({ answer: allSteps ? steps.join('\n\n---\n\n') : (steps.at(-1) || ''), steps });
@@ -198,4 +208,4 @@ setInterval(() => {
     .catch(e => localStorage.setItem('__res_' + reqId, JSON.stringify({ answer: `ERROR: ${e}` })));
 }, 200);
 
-console.log('%c🚀 Bridge v12 — Pure Discovery READY', 'color:gold; font-weight:bold');
+console.log('%c🚀 Bridge v14 — Frame Stripping READY', 'color:gold; font-weight:bold');
