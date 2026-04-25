@@ -216,7 +216,7 @@ async function updateDashboard() {
             ws.send(JSON.stringify({
                 id: 100,
                 method: 'Runtime.evaluate',
-                params: { expression: 'JSON.stringify({ registry: window.__chatRegistry, names: window.__chatNames, captured: !!window.__agCaptured?.last, relinkMode: window.__relinkMode, logs: (window.__agLogs || []).slice(' + lastLogIndex + ') })' }
+                params: { expression: 'JSON.stringify({ registry: window.__chatRegistry, names: window.__chatNames, lastOutputs: window.__lastOutputs, busyAgents: window.__busyAgents, captured: !!window.__agCaptured?.last, relinkMode: window.__relinkMode, logs: (window.__agLogs || []).slice(' + lastLogIndex + ') })' }
             }));
         });
         ws.on('message', (data: WebSocket.Data) => {
@@ -262,7 +262,9 @@ async function updateDashboard() {
                         registry: { ...config.registry, ...browserState.registry },
                         names: { ...browserState.names, ...config.chatNames },
                         duties: config.chatDuties || {},
-                        relinkMode: browserState.relinkMode
+                        relinkMode: browserState.relinkMode,
+                        busyAgents: browserState.busyAgents,
+                        lastOutputs: browserState.lastOutputs
                     }
                 });
                 ws.close();
@@ -386,6 +388,9 @@ function getDashboardHtml() {
         .chat-name { font-weight: bold; color: #ce9178; font-size: 1.1em; }
         .chat-id { font-size: 0.75em; color: #808080; font-family: monospace; overflow-wrap: break-word; padding-right: 25px; }
         .chat-duty { font-style: italic; color: #b5cea8; margin-top: 5px; font-size: 0.9em; background: rgba(0,0,0,0.15); padding: 5px 8px; border-radius: 4px; }
+        .last-thought { margin-top: 10px; font-size: 0.85em; color: #888; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+        .busy-badge { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #34d399; margin-right: 6px; box-shadow: 0 0 8px #34d399; animation: pulse-busy 2s infinite; }
+        @keyframes pulse-busy { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
         .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
         button { background: #333; color: #ccc; border: 1px solid #444; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; transition: 0.2s; }
         button:hover { background: #444; border-color: #569cd6; color: #569cd6; }
@@ -453,21 +458,36 @@ function getDashboardHtml() {
                 const allIndices = new Set([...Object.keys(data.registry), ...Object.keys(data.names), ...Object.keys(data.duties)]);
                 Array.from(allIndices).sort((a,b) => parseInt(a)-parseInt(b)).forEach(idx => {
                     const id = data.registry[idx];
+                    const name = data.names[idx] || 'Agent';
+                    const duty = data.duties[idx] || 'No role';
+                    const isBusy = id && data.busyAgents && data.busyAgents[id];
+                    const lastText = (id && data.lastOutputs && data.lastOutputs[id]) ? data.lastOutputs[id] : 'No activity recorded...';
                     const isRelinking = (data.relinkMode == idx);
                     const anyRelinking = (data.relinkMode !== null);
-                    list.innerHTML += \`
-                        <div class="chat-item \${isRelinking ? 'relinking' : ''}">
-                            <button class="delete-btn" onclick="deleteAgent('\${idx}')">×</button>
-                            <div class="chat-name">\${idx}: \${data.names[idx] || 'Agent'} \${isRelinking ? '(LISTENING...)' : ''}</div>
-                            <div class="chat-id">\${id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED')}</div>
-                            <div class="chat-duty">" \${data.duties[idx] || 'No role'} "</div>
-                            <div class="actions">
-                                <button class="primary" onclick="rename('\${idx}')">Name</button>
-                                <button onclick="defineDuty('\${idx}')">Role</button>
-                                \${isRelinking ? \`<button class="warning" onclick="cancelRelink('\${idx}')">Cancel</button>\` 
-                                              : \`<button \${anyRelinking ? 'disabled' : ''} onclick="relink('\${idx}')">Relink</button>\`}
-                            </div>
-                        </div>\`;
+                    
+                    const busyBadge = isBusy ? '<span class="busy-badge"></span>' : '';
+                    const listeningText = isRelinking ? '(LISTENING...)' : '';
+                    const idText = id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED');
+                    
+                    let buttons = '<button class="primary" onclick="rename(\\''+idx+'\\')">Name</button>' +
+                                  '<button onclick="defineDuty(\\''+idx+'\\')">Role</button>';
+                                  
+                    if (isRelinking) {
+                        buttons += '<button class="warning" onclick="cancelRelink(\\''+idx+'\\')">Cancel</button>';
+                    } else {
+                        const disabled = anyRelinking ? 'disabled' : '';
+                        buttons += '<button ' + disabled + ' onclick="relink(\\''+idx+'\\')">Relink</button>';
+                    }
+
+                    list.innerHTML += 
+                        '<div class="chat-item ' + (isRelinking ? 'relinking' : '') + '">' +
+                            '<button class="delete-btn" onclick="deleteAgent(\\''+idx+'\\')">×</button>' +
+                            '<div class="chat-name">' + busyBadge + idx + ': ' + name + ' ' + listeningText + '</div>' +
+                            '<div class="chat-id">' + idText + '</div>' +
+                            '<div class="chat-duty">" ' + duty + ' "</div>' +
+                            '<div class="last-thought">' + lastText + '</div>' +
+                            '<div class="actions">' + buttons + '</div>' +
+                        '</div>';
                 });
             }
         });

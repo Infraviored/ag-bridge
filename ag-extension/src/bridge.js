@@ -9,6 +9,8 @@ window.__chatNames = window.__chatNames || {};
 window.__activeReaders = {};
 window.__activeStreamCount = 0;
 window.__cmdActive = false;
+window.__lastOutputs = window.__lastOutputs || {};
+window.__busyAgents = window.__busyAgents || {};
 
 // ── VERBOSE LOGGING ─────────────────────────────────────────
 function log(msg, level = 'info') {
@@ -65,7 +67,13 @@ window.fetch = async function(...args) {
 
                     // Instant peek for the user
                     if (chunk.includes('modifiedResponse')) {
-                        log(`📝 [PASSIVE] Data: ${chunk.match(/"modifiedResponse":"((?:[^"\\]|\\.)*)"/)?.[1]?.slice(0,60)}...`, 'debug');
+                        const text = chunk.match(/"modifiedResponse":"((?:[^"\\]|\\.)*)"/)?.[1];
+                        if (text) {
+                            const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                            // Truncate to 300 chars for memory safety
+                            window.__lastOutputs[conversationId] = clean.slice(-300);
+                            log(`📝 [PASSIVE] Data: ${clean.slice(0,60)}...`, 'debug');
+                        }
                     }
                 }
             } catch (e) { 
@@ -100,6 +108,17 @@ window.fetch = async function(...args) {
 window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
     const c = window.__agCaptured;
     if (!c) throw new Error("No context captured. Type one message manually.");
+
+    // BUSY GUARD: Determine conversationId from registry if possible
+    const conversationId = Object.entries(window.__chatRegistry).find(([idx]) => cascadeId.startsWith(`ag-${idx}-`))?.[1] 
+                         || Object.values(window.__chatRegistry)[0]; // Fallback to first
+
+    if (window.__busyAgents[conversationId]) {
+        const last = window.__lastOutputs[conversationId] || "Thinking...";
+        throw new Error(`AGENT STILL WORKING. LAST OUTPUT: ${last}`);
+    }
+
+    window.__busyAgents[conversationId] = true;
 
     log(`🧹 Purging old chunks for cascade ${cascadeId.slice(0,8)}...`);
     window.__agReadLog = window.__agReadLog.filter(x => !x.payload?.includes(cascadeId));
@@ -176,9 +195,12 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
             if (now - sentAt > globalTimeoutMs) {
                 clearInterval(iv);
                 log(`❌ TIMEOUT (${globalTimeoutMs/1000}s): Total chunks=${relevant.length}, lastIdle=${lastIdleTs>0}`, 'error');
+                window.__busyAgents[conversationId] = false;
                 reject(new Error(`Timeout. Chunks: ${relevant.length}`));
             }
         }, 500);
+    }).finally(() => {
+        window.__busyAgents[conversationId] = false;
     });
 };
 
