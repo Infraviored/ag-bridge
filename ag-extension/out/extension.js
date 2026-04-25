@@ -156,12 +156,15 @@ async function injectBridge() {
         const config = loadConfig();
         const verbose = vscode.workspace.getConfiguration('antigravity.bridge').get('verbose', false);
         const timeoutMinutes = vscode.workspace.getConfiguration('antigravity.bridge').get('timeout', 1);
+        const cliTimeoutMinutes = vscode.workspace.getConfiguration('antigravity.bridge').get('cliTimeout', 10);
         const timeoutMs = timeoutMinutes * 60 * 1000;
+        const cliTimeoutMs = cliTimeoutMinutes * 60 * 1000;
         const syncScript = `
             Object.assign(window.__chatRegistry, ${JSON.stringify(config.registry || {})});
             Object.assign(window.__chatNames, ${JSON.stringify(config.chatNames || {})});
             window.__agVerbose = ${verbose};
             window.__agTimeout = ${timeoutMs};
+            window.__agCliTimeout = ${cliTimeoutMs};
         `;
         const ws = new ws_1.default(tab.webSocketDebuggerUrl);
         ws.on('open', () => {

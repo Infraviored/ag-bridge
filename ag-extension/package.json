@@ -2,7 +2,7 @@
   "name": "ag-bridge-extension",
   "displayName": "Antigravity Bridge",
   "description": "Automates bridge injection and communication with Antigravity",
-  "version": "1.8.9",
+  "version": "1.9.1",
   "icon": "icon.png",
   "publisher": "infraviored",
   "repository": {

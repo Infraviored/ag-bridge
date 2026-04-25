@@ -25,7 +25,7 @@ function log(msg, level = 'info') {
     console.log(`%c${entry.msg}`, styles[level] || styles.info);
 }
 
-console.log('%c🚀 Bridge v22 loaded — TOTAL VISIBILITY ACTIVE', 'color:magenta; font-weight:bold; font-size:14px');
+console.log('%c🚀 Bridge v26 loaded — STATE-AWARE ORCHESTRATION', 'color:magenta; font-weight:bold; font-size:14px');
 
 // ── FETCH WRAPPER (Passive Tap) ─────────────────────────────
 window.fetch = async function(...args) {
@@ -51,13 +51,27 @@ window.fetch = async function(...args) {
                     }
                     const chunk = decoder.decode(value, { stream: true });
                     window.__agReadLog.push({ ts: Date.now(), source: 'passive', payload: chunk });
+
+                    // 🆕 AUTO-DISCOVERY OF NEW CHATS
+                    const m = chunk.match(/"conversationId"\s*:\s*"([a-f0-9-]{36})"/);
+                    if (m) {
+                        const id = m[1];
+                        if (!Object.values(window.__chatRegistry).includes(id)) {
+                            const idx = Object.keys(window.__chatRegistry).length + 1;
+                            window.__chatRegistry[idx] = id;
+                            log(`🆕 AUTO-DISCOVERY: Chat ${idx} detected (${id.slice(0,8)}...)`, 'success');
+                        }
+                    }
+
                     // Instant peek for the user
                     if (chunk.includes('modifiedResponse')) {
                         log(`📝 [PASSIVE] Data: ${chunk.match(/"modifiedResponse":"((?:[^"\\]|\\.)*)"/)?.[1]?.slice(0,60)}...`, 'debug');
                     }
                 }
             } catch (e) { 
-                log(`❌ [PASSIVE] Stream Error: ${e.message}`, 'error');
+                if (!e.message.includes('aborted')) {
+                    log(`❌ [PASSIVE] Stream Error: ${e.message}`, 'error');
+                }
                 window.__activeStreamCount--;
             }
         })();
@@ -106,7 +120,7 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
 
     let lastRunningTs = 0, lastIdleTs = 0, lastChunkTs = 0;
     let isFastExit = false;
-    const timeoutMs = 180000;
+    const globalTimeoutMs = window.__agCliTimeout || 600000; // Match CLI or 10m fallback
     const SILENCE_MS = window.__agTimeout;
 
     return new Promise((resolve, reject) => {
@@ -134,7 +148,7 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
 
             if ((now - sentAt) % 2500 < 600 && !isFastExit) {
                 const state = lastRunningTs > lastIdleTs ? 'RUNNING' : (lastIdleTs > 0 ? 'IDLE' : 'WAITING');
-                const suffix = state === 'RUNNING' ? ' (Waiting for tool...)' : ` (Silence: ${(silenceTime/1000).toFixed(1)}s/${SILENCE_MS/1000}s)`;
+                const suffix = state === 'RUNNING' ? ` (Waiting for tool... ${((globalTimeoutMs - (now - sentAt))/1000).toFixed(0)}s left)` : ` (Silence: ${(silenceTime/1000).toFixed(1)}s/${SILENCE_MS/1000}s)`;
                 log(`⏳ HEARTBEAT: Chunks=${relevant.length} | State=${state}${suffix}`, 'debug');
             }
 
@@ -159,9 +173,9 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
                 resolve(finalAnswer);
             }
 
-            if (now - sentAt > timeoutMs) {
+            if (now - sentAt > globalTimeoutMs) {
                 clearInterval(iv);
-                log(`❌ TIMEOUT (180s): Total chunks=${relevant.length}, lastIdle=${lastIdleTs>0}`, 'error');
+                log(`❌ TIMEOUT (${globalTimeoutMs/1000}s): Total chunks=${relevant.length}, lastIdle=${lastIdleTs>0}`, 'error');
                 reject(new Error(`Timeout. Chunks: ${relevant.length}`));
             }
         }, 500);
