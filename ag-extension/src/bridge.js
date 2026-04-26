@@ -10,6 +10,7 @@ window.__activeReaders = {};
 window.__activeStreamCount = 0;
 window.__cmdActive = false;
 window.__lastOutputs = window.__lastOutputs || {};
+window.__lastPrompts = window.__lastPrompts || {};
 window.__busyAgents = window.__busyAgents || {};
 
 // ── VERBOSE LOGGING ─────────────────────────────────────────
@@ -69,13 +70,19 @@ window.fetch = async function(...args) {
                     // Instant peek for the user
                     if (chunk.includes('modifiedResponse')) {
                         const text = chunk.match(/"modifiedResponse":"((?:[^"\\]|\\.)*)"/)?.[1];
-                        if (text) {
+                        if (text && activeConversationId) {
                             const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-                            // Truncate to 300 chars for memory safety
-                            if (activeConversationId) {
-                                window.__lastOutputs[activeConversationId] = clean.slice(-300);
-                            }
-                            log(`📝 [PASSIVE] Data: ${clean.slice(0,60)}...`, 'debug');
+                            const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
+                            window.__lastOutputs[activeConversationId] = snippet;
+                        }
+                    }
+
+                    if (chunk.includes('"userMessage"') || chunk.includes('"role":"user"') || chunk.includes('"role": "user"')) {
+                        const text = chunk.match(/"(?:text|content)"\s*:\s*"((?:[^"\\]|\\.)*)"/)?.[1];
+                        if (text && activeConversationId) {
+                            const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                            const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
+                            window.__lastPrompts[activeConversationId] = snippet;
                         }
                     }
                 }
@@ -122,6 +129,7 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
     }
 
     window.__busyAgents[conversationId] = true;
+    window.__lastPrompts[conversationId] = (prompt.length > 400) ? '...' + prompt.slice(-400) : prompt;
 
     log(`🧹 Purging old chunks for cascade ${cascadeId.slice(0,8)}...`);
     window.__agReadLog = window.__agReadLog.filter(x => !x.payload?.includes(cascadeId));

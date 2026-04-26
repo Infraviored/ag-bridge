@@ -14,6 +14,7 @@ let pendingDeletes: Set<string> = new Set(); // Guard against race condition
 let lastLogIndex = 0;
 let isPolling = false;
 let lastHeartbeat = 0;
+let globalExtensionPath: string;
 
 enum BridgeState {
     MissingRDP,
@@ -183,7 +184,10 @@ async function showDashboard() {
         dashboardPanel.reveal(vscode.ViewColumn.Beside);
         return;
     }
-    dashboardPanel = vscode.window.createWebviewPanel('agDashboard', 'Antigravity Bridge Status', vscode.ViewColumn.Beside, { enableScripts: true });
+    dashboardPanel = vscode.window.createWebviewPanel('agDashboard', 'Antigravity Bridge Status', vscode.ViewColumn.Beside, { 
+        enableScripts: true,
+        localResourceRoots: [vscode.Uri.file(globalExtensionPath)]
+    });
     dashboardPanel.onDidDispose(() => dashboardPanel = undefined);
 
     dashboardPanel.webview.onDidReceiveMessage(async message => {
@@ -199,7 +203,7 @@ async function showDashboard() {
         updateDashboard();
     });
 
-    dashboardPanel.webview.html = getDashboardHtml();
+    dashboardPanel.webview.html = getDashboardHtml(dashboardPanel.webview, globalExtensionPath);
     updateDashboard();
 }
 
@@ -216,7 +220,7 @@ async function updateDashboard() {
             ws.send(JSON.stringify({
                 id: 100,
                 method: 'Runtime.evaluate',
-                params: { expression: 'JSON.stringify({ registry: window.__chatRegistry, names: window.__chatNames, lastOutputs: window.__lastOutputs, busyAgents: window.__busyAgents, captured: !!window.__agCaptured?.last, relinkMode: window.__relinkMode, logs: (window.__agLogs || []).slice(' + lastLogIndex + ') })' }
+                params: { expression: 'JSON.stringify({ registry: window.__chatRegistry, names: window.__chatNames, lastOutputs: window.__lastOutputs, lastPrompts: window.__lastPrompts, busyAgents: window.__busyAgents, captured: !!window.__agCaptured?.last, relinkMode: window.__relinkMode, logs: (window.__agLogs || []).slice(' + lastLogIndex + ') })' }
             }));
         });
         ws.on('message', (data: WebSocket.Data) => {
@@ -264,7 +268,8 @@ async function updateDashboard() {
                         duties: config.chatDuties || {},
                         relinkMode: browserState.relinkMode,
                         busyAgents: browserState.busyAgents,
-                        lastOutputs: browserState.lastOutputs
+                        lastOutputs: browserState.lastOutputs,
+                        lastPrompts: browserState.lastPrompts
                     }
                 });
                 ws.close();
@@ -368,7 +373,10 @@ async function deleteAgent(idx: string) {
     }
 }
 
-function getDashboardHtml() {
+function getDashboardHtml(webview: vscode.Webview, extensionPath: string) {
+    const iconPath = vscode.Uri.file(path.join(extensionPath, 'agbridge-icon.png'));
+    const iconUri = webview.asWebviewUri(iconPath);
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -388,7 +396,7 @@ function getDashboardHtml() {
         .chat-name { font-weight: bold; color: #ce9178; font-size: 1.1em; }
         .chat-id { font-size: 0.75em; color: #808080; font-family: monospace; overflow-wrap: break-word; padding-right: 25px; }
         .chat-duty { font-style: italic; color: #b5cea8; margin-top: 5px; font-size: 0.9em; background: rgba(0,0,0,0.15); padding: 5px 8px; border-radius: 4px; }
-        .last-thought { margin-top: 10px; font-size: 0.85em; color: #888; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+        .last-thought { margin-top: 10px; font-size: 0.85em; color: #888; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; white-space: pre-wrap; word-break: break-all; }
         .busy-badge { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #34d399; margin-right: 6px; box-shadow: 0 0 8px #34d399; animation: pulse-busy 2s infinite; }
         @keyframes pulse-busy { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
         .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
@@ -408,7 +416,7 @@ function getDashboardHtml() {
 <body>
     <div class="container">
         <button class="refresh-btn" onclick="refresh()">↻ Refresh</button>
-        <h2>🚀 Antigravity Command Center</h2>
+        <h2><img src="${iconUri}" width="28" style="vertical-align: middle;"> Antigravity Command Center</h2>
         <div class="status-row"><span>Status:</span><span id="bridge-status">Offline</span></div>
         <div class="status-row"><span>Gateway:</span><span id="token-status">-</span></div>
         <h3>Registry <button class="danger" onclick="resetAll()">Wipe</button></h3>
@@ -460,11 +468,12 @@ function getDashboardHtml() {
                     const id = data.registry[idx];
                     const name = data.names[idx] || 'Agent';
                     const duty = data.duties[idx] || 'No role';
-                    const isBusy = id && data.busyAgents && data.busyAgents[id];
-                    const lastText = (id && data.lastOutputs && data.lastOutputs[id]) ? data.lastOutputs[id] : 'No activity recorded...';
                     const isRelinking = (data.relinkMode == idx);
                     const anyRelinking = (data.relinkMode !== null);
-                    
+                    const isBusy = id && data.busyAgents && data.busyAgents[id];
+                    const lastPrompt = (id && data.lastPrompts && data.lastPrompts[id]) ? data.lastPrompts[id] : 'No prompt recorded...';
+                    const lastResponse = (id && data.lastOutputs && data.lastOutputs[id]) ? data.lastOutputs[id] : 'No activity recorded...';
+
                     const busyBadge = isBusy ? '<span class="busy-badge"></span>' : '';
                     const listeningText = isRelinking ? '(LISTENING...)' : '';
                     const idText = id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED');
@@ -485,7 +494,8 @@ function getDashboardHtml() {
                             '<div class="chat-name">' + busyBadge + idx + ': ' + name + ' ' + listeningText + '</div>' +
                             '<div class="chat-id">' + idText + '</div>' +
                             '<div class="chat-duty">" ' + duty + ' "</div>' +
-                            '<div class="last-thought">' + lastText + '</div>' +
+                            '<div class="last-thought"><b>Last Prompt:</b> ' + lastPrompt + '</div>' +
+                            '<div class="last-thought" style="margin-top: 5px; border-top:none; padding-top:0;"><b>Last Response:</b> ' + lastResponse + '</div>' +
                             '<div class="actions">' + buttons + '</div>' +
                         '</div>';
                 });
@@ -498,6 +508,7 @@ function getDashboardHtml() {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    globalExtensionPath = context.extensionPath;
     setupGlobalCommand(context.extensionPath);
     outputChannel = vscode.window.createOutputChannel("Antigravity Bridge");
     context.subscriptions.push(outputChannel);
