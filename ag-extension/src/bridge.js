@@ -41,6 +41,7 @@ window.fetch = async function(...args) {
         const cloned = res.clone();
         const reader = cloned.body.getReader();
         const decoder = new TextDecoder();
+        let activeConversationId = null;
 
         (async () => {
             try {
@@ -57,11 +58,11 @@ window.fetch = async function(...args) {
                     // 🆕 AUTO-DISCOVERY OF NEW CHATS
                     const m = chunk.match(/"conversationId"\s*:\s*"([a-f0-9-]{36})"/);
                     if (m) {
-                        const id = m[1];
-                        if (!Object.values(window.__chatRegistry).includes(id)) {
+                        activeConversationId = m[1];
+                        if (!Object.values(window.__chatRegistry).includes(activeConversationId)) {
                             const idx = Object.keys(window.__chatRegistry).length + 1;
-                            window.__chatRegistry[idx] = id;
-                            log(`🆕 AUTO-DISCOVERY: Chat ${idx} detected (${id.slice(0,8)}...)`, 'success');
+                            window.__chatRegistry[idx] = activeConversationId;
+                            log(`🆕 AUTO-DISCOVERY: Chat ${idx} detected (${activeConversationId.slice(0,8)}...)`, 'success');
                         }
                     }
 
@@ -71,7 +72,9 @@ window.fetch = async function(...args) {
                         if (text) {
                             const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                             // Truncate to 300 chars for memory safety
-                            window.__lastOutputs[conversationId] = clean.slice(-300);
+                            if (activeConversationId) {
+                                window.__lastOutputs[activeConversationId] = clean.slice(-300);
+                            }
                             log(`📝 [PASSIVE] Data: ${clean.slice(0,60)}...`, 'debug');
                         }
                     }

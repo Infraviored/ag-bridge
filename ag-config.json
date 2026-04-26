@@ -1,13 +1,12 @@
 {
   "registry": {
-    "1": "32828ec4-8dba-4259-8469-9b475c1f149a",
-    "2": "ff628bb2-9bcf-4fdc-aabd-71a7ef18ee29",
-    "3": "acddf55d-a30c-4ba4-ba16-a59624418037"
+    "1": "76493180-23e7-4fff-b99f-34bc25a4a4bd",
+    "4": "260921fe-2ad0-41bb-9512-4fbf5140cb72"
   },
   "chatNames": {
     "1": "Hermano"
   },
-  "ts": 1777149899023,
+  "ts": 1777189018659,
   "chatDuties": {
     "1": "Extension Builder -- build full ag extension"
   },
