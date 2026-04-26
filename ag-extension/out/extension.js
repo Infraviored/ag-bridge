@@ -229,6 +229,39 @@ async function showDashboard() {
     dashboardPanel.onDidDispose(() => dashboardPanel = undefined);
     dashboardPanel.webview.onDidReceiveMessage(async (message) => {
         switch (message.command) {
+            case 'changeIndex':
+                const newIdx = await vscode.window.showInputBox({ prompt: `New Index for Agent ${message.idx}`, value: message.idx });
+                if (newIdx && newIdx !== message.idx) {
+                    const config = loadConfig();
+                    if (config.registry[newIdx]) {
+                        vscode.window.showErrorMessage(`Index ${newIdx} is already in use!`);
+                        return;
+                    }
+                    // Move data
+                    config.registry[newIdx] = config.registry[message.idx];
+                    config.chatNames[newIdx] = config.chatNames[message.idx];
+                    config.chatDuties[newIdx] = config.chatDuties[message.idx];
+                    delete config.registry[message.idx];
+                    delete config.chatNames[message.idx];
+                    delete config.chatDuties[message.idx];
+                    saveConfig(config);
+                    // Push to browser
+                    const tab = await getAntigravityTab();
+                    if (tab) {
+                        const ws = new ws_1.default(tab.webSocketDebuggerUrl);
+                        ws.on('open', () => {
+                            ws.send(JSON.stringify({ id: 107, method: 'Runtime.evaluate', params: { expression: `
+                                        window.__chatRegistry[${newIdx}] = window.__chatRegistry[${message.idx}];
+                                        window.__chatNames[${newIdx}] = window.__chatNames[${message.idx}];
+                                        delete window.__chatRegistry[${message.idx}];
+                                        delete window.__chatNames[${message.idx}];
+                                        if(window.__relinkMode == ${message.idx}) window.__relinkMode = ${newIdx};
+                                    ` } }));
+                            ws.on('message', () => ws.close());
+                        });
+                    }
+                }
+                break;
             case 'rename':
                 await renameChat(message.idx);
                 break;
@@ -427,134 +460,11 @@ async function deleteAgent(idx) {
 function getDashboardHtml(webview, extensionPath) {
     const iconPath = vscode.Uri.file(path.join(extensionPath, 'agbridge-icon.png'));
     const iconUri = webview.asWebviewUri(iconPath);
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #1e1e1e; color: #d4d4d4; padding: 20px; line-height: 1.5; }
-        .container { position: relative; background: rgba(45, 45, 45, 0.8); border-radius: 12px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(10px); }
-        h2 { color: #569cd6; margin: 0 0 20px 0; display: flex; align-items: center; gap: 10px; }
-        h3 { color: #9cdcfe; border-bottom: 1px solid #444; padding-bottom: 5px; margin-top: 30px; display: flex; justify-content: space-between; align-items: center; }
-        .status-row { display: flex; justify-content: space-between; margin-bottom: 10px; padding: 8px 12px; background: rgba(0,0,0,0.2); border-radius: 6px; }
-        .indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
-        .online { background: #4ec9b0; box-shadow: 0 0 8px #4ec9b0; }
-        .offline { background: #f44747; box-shadow: 0 0 8px #f44747; }
-        .chat-item { padding: 15px; background: rgba(255,255,255,0.05); margin-bottom: 10px; border-radius: 8px; border-left: 4px solid #569cd6; transition: 0.3s; position: relative; }
-        .chat-item.relinking { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.2); animation: pulse 2s infinite; }
-        @keyframes pulse { 0% { box-shadow: 0 0 0px #f59e0b; } 50% { box-shadow: 0 0 15px #f59e0b; } 100% { box-shadow: 0 0 0px #f59e0b; } }
-        .chat-name { font-weight: bold; color: #ce9178; font-size: 1.1em; }
-        .chat-id { font-size: 0.75em; color: #808080; font-family: monospace; overflow-wrap: break-word; padding-right: 25px; }
-        .chat-duty { font-style: italic; color: #b5cea8; margin-top: 5px; font-size: 0.9em; background: rgba(0,0,0,0.15); padding: 5px 8px; border-radius: 4px; }
-        .last-thought { margin-top: 10px; font-size: 0.85em; color: #888; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; white-space: pre-wrap; word-break: break-all; }
-        .busy-badge { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #34d399; margin-right: 6px; box-shadow: 0 0 8px #34d399; animation: pulse-busy 2s infinite; }
-        @keyframes pulse-busy { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
-        .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-        button { background: #333; color: #ccc; border: 1px solid #444; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; transition: 0.2s; }
-        button:hover { background: #444; border-color: #569cd6; color: #569cd6; }
-        button.primary { background: #0e639c; color: white; border: none; }
-        button.danger { color: #f44747; border-color: #f44747; }
-        button.danger:hover { background: #f44747; color: white; }
-        button.warning { color: #f59e0b; border-color: #f59e0b; }
-        button.copy-btn { background: #4ec9b0; color: #1e1e1e; border: none; font-weight: bold; width: 100%; margin-top: 20px; padding: 10px; }
-        .delete-btn { position: absolute; top: 15px; right: 15px; background: transparent; border: none; color: #444; font-size: 18px; padding: 0; min-width: 0; }
-        .delete-btn:hover { color: #f44747; }
-        .refresh-btn { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,0.1); border: none; }
-        .refresh-btn:hover { background: rgba(255,255,255,0.2); color: white; border-color: transparent; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <button class="refresh-btn" onclick="refresh()">↻ Refresh</button>
-        <h2><img src="${iconUri}" width="28" style="vertical-align: middle;"> Antigravity Command Center</h2>
-        <div class="status-row"><span>Status:</span><span id="bridge-status">Offline</span></div>
-        <div class="status-row"><span>Gateway:</span><span id="token-status">-</span></div>
-        <h3>Registry <button class="danger" onclick="resetAll()">Wipe</button></h3>
-        <div id="chat-list"></div>
-        <button class="copy-btn" id="copy-instr-btn" onclick="copyInstructions()">📋 Copy Delegation Prompt</button>
-    </div>
-    <script>
-        const vscode = acquireVsCodeApi();
-        let lastData = null;
-        function refresh() { vscode.postMessage({ command: 'refresh' }); }
-        function rename(idx) { vscode.postMessage({ command: 'rename', idx }); }
-        function defineDuty(idx) { vscode.postMessage({ command: 'defineDuty', idx }); }
-        function resetAll() { vscode.postMessage({ command: 'resetAll' }); }
-        function relink(idx) { vscode.postMessage({ command: 'relink', idx }); }
-        function cancelRelink(idx) { vscode.postMessage({ command: 'cancelRelink', idx }); }
-        function deleteAgent(idx) { vscode.postMessage({ command: 'deleteAgent', idx }); }
-        function copyInstructions() {
-            if (!lastData) return;
-            let agents = "";
-            Object.keys(lastData.registry).forEach(idx => { 
-                agents += '- [Agent ' + idx + ']: ' + (lastData.names[idx] || 'Agent') + ' (Primary Duty: ' + (lastData.duties[idx] || 'General Intelligence') + ')\\n'; 
-            });
-            const text = '# ANTIGRAVITY ORCHESTRATION PROTOCOL\\n\\n' +
-                'You are an orchestrator with access to specialized sub-agents via the \\\'agbridge\\\' CLI. Each agent maintains a persistent, context-aware session.\\n\\n' +
-                '## AVAILABLE AGENTS:\\n' + agents + '\\n' +
-                '## CONTROL INTERFACE:\\n' +
-                '- Use \\\'agbridge <idx> "prompt"\\\' to delegate a task to a specific agent.\\n' +
-                '- Use \\\'agbridge <idx> "prompt" --all\\\' for strict supervision. This retrieves the COMPLETE execution path, including all intermediate thoughts and tool calls. WARNING: This may blow the context window; use only when full transparency of the agent\\\'s path is required.\\n\\n' +
-                '## GUIDELINES:\\n' +
-                '1. DELEGATE tasks based on the specific duties listed above.\\n' +
-                '2. PERSISTENCE is active; you do not need to re-explain context to an agent in the same session.';
-            
-            navigator.clipboard.writeText(text).then(() => {
-                const btn = document.getElementById('copy-instr-btn');
-                btn.innerText = "✅ Protocol Copied!";
-                setTimeout(() => btn.innerText = "📋 Copy Delegation Prompt", 2000);
-            });
-        }
-        window.addEventListener('message', event => {
-            const { type, data } = event.data;
-            if (type === 'status') {
-                lastData = data;
-                document.getElementById('bridge-status').innerHTML = data.connected ? '<span class="indicator online"></span> Online' : '<span class="indicator offline"></span> Offline';
-                document.getElementById('token-status').innerHTML = data.tokenCaptured ? '<span class="indicator online"></span> Ready' : '<span class="indicator offline"></span> Idle';
-                const list = document.getElementById('chat-list');
-                list.innerHTML = '';
-                const allIndices = new Set([...Object.keys(data.registry), ...Object.keys(data.names), ...Object.keys(data.duties)]);
-                Array.from(allIndices).sort((a,b) => parseInt(a)-parseInt(b)).forEach(idx => {
-                    const id = data.registry[idx];
-                    const name = data.names[idx] || 'Agent';
-                    const duty = data.duties[idx] || 'No role';
-                    const isRelinking = (data.relinkMode == idx);
-                    const anyRelinking = (data.relinkMode !== null);
-                    const isBusy = id && data.busyAgents && data.busyAgents[id];
-                    const lastPrompt = (id && data.lastPrompts && data.lastPrompts[id]) ? data.lastPrompts[id] : 'No prompt recorded...';
-                    const lastResponse = (id && data.lastOutputs && data.lastOutputs[id]) ? data.lastOutputs[id] : 'No activity recorded...';
-
-                    const busyBadge = isBusy ? '<span class="busy-badge"></span>' : '';
-                    const listeningText = isRelinking ? '(LISTENING...)' : '';
-                    const idText = id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED');
-                    
-                    let buttons = '<button class="primary" onclick="rename(\\''+idx+'\\')">Name</button>' +
-                                  '<button onclick="defineDuty(\\''+idx+'\\')">Role</button>';
-                                  
-                    if (isRelinking) {
-                        buttons += '<button class="warning" onclick="cancelRelink(\\''+idx+'\\')">Cancel</button>';
-                    } else {
-                        const disabled = anyRelinking ? 'disabled' : '';
-                        buttons += '<button ' + disabled + ' onclick="relink(\\''+idx+'\\')">Relink</button>';
-                    }
-
-                    list.innerHTML += 
-                        '<div class="chat-item ' + (isRelinking ? 'relinking' : '') + '">' +
-                            '<button class="delete-btn" onclick="deleteAgent(\\''+idx+'\\')">×</button>' +
-                            '<div class="chat-name">' + busyBadge + idx + ': ' + name + ' ' + listeningText + '</div>' +
-                            '<div class="chat-id">' + idText + '</div>' +
-                            '<div class="chat-duty">" ' + duty + ' "</div>' +
-                            '<div class="last-thought"><b>Last Prompt:</b> ' + lastPrompt + '</div>' +
-                            '<div class="last-thought" style="margin-top: 5px; border-top:none; padding-top:0;"><b>Last Response:</b> ' + lastResponse + '</div>' +
-                            '<div class="actions">' + buttons + '</div>' +
-                        '</div>';
-                });
-            }
-        });
-        setInterval(refresh, 2000);
-    </script>
-</body>
-</html>`;
+    const htmlPath = path.join(extensionPath, 'src', 'dashboard.html');
+    let html = fs.readFileSync(htmlPath, 'utf8');
+    // Replace placeholders
+    html = html.replace(/\${iconUri}/g, iconUri.toString());
+    return html;
 }
 function activate(context) {
     globalExtensionPath = context.extensionPath;
