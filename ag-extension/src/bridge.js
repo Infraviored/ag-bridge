@@ -41,6 +41,17 @@ function log(msg, level = 'info') {
 
 console.log('%c🚀 Bridge v26 loaded — STATE-AWARE ORCHESTRATION', 'color:magenta; font-weight:bold; font-size:14px');
 
+// ── KEYBOARD SHORTCUTS ──────────────────────────────────────
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        if (window.__relinkMode) {
+            log(`🚫 [RELINK] Cancelled via ESCAPE`, 'warn');
+            window.__relinkMode = null;
+            window.__relinkOldId = null;
+        }
+    }
+}, true);
+
 // ── FETCH WRAPPER (Passive Tap) ─────────────────────────────
 window.fetch = async function(...args) {
     const urlStr = args[0]?.toString() || "";
@@ -77,12 +88,21 @@ window.fetch = async function(...args) {
                         const reg = getRegistry();
                         const existingValues = Object.values(reg);
                         if (!existingValues.includes(activeConversationId)) {
-                            // Find next available numeric slot
-                            let idx = 1;
-                            while (reg[idx]) idx++;
-                            reg[idx] = activeConversationId;
+                            // 🆕 Discovery Logic: Prioritize Relink Mode
+                            let targetIdx = window.__relinkMode;
+                            if (targetIdx) {
+                                log(`🔗 [RELINK-DISCOVERY] Mapping ${activeConversationId.slice(0,8)} to Slot ${targetIdx}`, 'success');
+                                window.__relinkMode = null;
+                                window.__relinkOldId = null;
+                            } else {
+                                // Standard auto-discovery
+                                targetIdx = 1;
+                                while (reg[targetIdx]) targetIdx++;
+                                log(`🆕 AUTO-DISCOVERY: Chat ${targetIdx} detected (${activeConversationId.slice(0,8)}...)`, 'success');
+                            }
+                            
+                            reg[targetIdx] = activeConversationId;
                             setRegistry(reg);
-                            log(`🆕 AUTO-DISCOVERY: Chat ${idx} detected (${activeConversationId.slice(0,8)}...)`, 'success');
                         }
                     }
 

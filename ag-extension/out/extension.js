@@ -409,7 +409,7 @@ async function resetAll() {
     if (tab) {
         const ws = new ws_1.default(tab.webSocketDebuggerUrl);
         ws.on('open', () => {
-            ws.send(JSON.stringify({ id: 102, method: 'Runtime.evaluate', params: { expression: `window.__chatRegistry = {}; window.__chatNames = {}; window.__relinkMode = null;` } }));
+            ws.send(JSON.stringify({ id: 102, method: 'Runtime.evaluate', params: { expression: `setRegistry({}); window.__chatNames = {}; window.__relinkMode = null;` } }));
             ws.on('message', () => ws.close());
         });
     }
@@ -424,7 +424,7 @@ async function relink(idx) {
     if (tab) {
         const ws = new ws_1.default(tab.webSocketDebuggerUrl);
         ws.on('open', () => {
-            ws.send(JSON.stringify({ id: 103, method: 'Runtime.evaluate', params: { expression: `window.__chatRegistry[${idx}] = ""; window.__relinkMode = ${idx}; window.__relinkOldId = "${oldId}";` } }));
+            ws.send(JSON.stringify({ id: 103, method: 'Runtime.evaluate', params: { expression: `window.__chatRegistry[${idx}] = ""; setRegistry(window.__chatRegistry); window.__relinkMode = ${idx}; window.__relinkOldId = "${oldId}";` } }));
             ws.on('message', () => ws.close());
         });
     }
@@ -435,7 +435,7 @@ async function cancelRelink(idx) {
     if (tab) {
         const ws = new ws_1.default(tab.webSocketDebuggerUrl);
         ws.on('open', () => {
-            ws.send(JSON.stringify({ id: 104, method: 'Runtime.evaluate', params: { expression: `window.__relinkMode = null; window.__relinkOldId = null;` } }));
+            ws.send(JSON.stringify({ id: 104, method: 'Runtime.evaluate', params: { expression: `setRegistry(window.__chatRegistry); window.__relinkMode = null; window.__relinkOldId = null;` } }));
             ws.on('message', () => ws.close());
         });
     }
@@ -452,7 +452,7 @@ async function deleteAgent(idx) {
     if (tab) {
         const ws = new ws_1.default(tab.webSocketDebuggerUrl);
         ws.on('open', () => {
-            ws.send(JSON.stringify({ id: 105, method: 'Runtime.evaluate', params: { expression: `delete window.__chatRegistry[${idx}]; delete window.__chatNames[${idx}]; if(window.__relinkMode == ${idx}) window.__relinkMode = null;` } }));
+            ws.send(JSON.stringify({ id: 105, method: 'Runtime.evaluate', params: { expression: `delete window.__chatRegistry[${idx}]; setRegistry(window.__chatRegistry); delete window.__chatNames[${idx}]; if(window.__relinkMode == ${idx}) window.__relinkMode = null;` } }));
             ws.on('message', () => ws.close());
         });
     }

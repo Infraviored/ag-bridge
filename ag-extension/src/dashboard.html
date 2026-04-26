@@ -67,19 +67,27 @@
             box-shadow: 0 0 8px #f44747;
         }
 
-        .chat-item {
+        .chat-card {
+            background: #1e1e1e;
+            border-left: 4px solid #333;
             padding: 15px;
-            background: rgba(255, 255, 255, 0.05);
-            margin-bottom: 10px;
             border-radius: 8px;
-            border-left: 4px solid #569cd6;
-            transition: 0.3s;
+            margin-bottom: 15px;
             position: relative;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            overflow: hidden;
         }
 
-        .chat-item.relinking {
+        .chat-card.busy {
+            border-left-color: #4ec9b0;
+            box-shadow: 0 0 15px rgba(78, 201, 176, 0.2);
+            animation: pulse-busy 2s infinite;
+        }
+
+        .chat-card.relinking {
             border-left-color: #f59e0b;
-            background: rgba(245, 158, 11, 0.2);
+            background: rgba(245, 158, 11, 0.05);
             animation: pulse 2s infinite;
         }
 
@@ -165,37 +173,24 @@
         }
 
         .last-thought {
-            margin-top: 10px;
-            font-size: 0.85em;
+            font-size: 11px;
             color: #888;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-            padding-top: 8px;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            white-space: pre-wrap;
-            word-break: break-all;
+            margin-top: 10px;
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            height: 46px; /* Fixed height for 3 lines */
         }
 
-        .chat-item.busy {
-            border-left-color: #4ec9b0;
-            background: rgba(78, 201, 176, 0.05);
-            animation: pulse-subtle 3s infinite ease-in-out;
-        }
-
-        @keyframes pulse-subtle {
-            0% {
-                box-shadow: 0 0 0px transparent;
-                background: rgba(78, 201, 176, 0.05);
-            }
-
-            50% {
-                box-shadow: 0 0 15px rgba(78, 201, 176, 0.1);
-                background: rgba(78, 201, 176, 0.08);
-            }
-
-            100% {
-                box-shadow: 0 0 0px transparent;
-                background: rgba(78, 201, 176, 0.05);
-            }
+        .last-thought b {
+            display: block;
+            color: #aaa;
+            margin-bottom: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 10px;
         }
 
         .actions {
@@ -321,6 +316,15 @@
     <script>
         const vscode = acquireVsCodeApi();
         let lastData = null;
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                if (lastData && lastData.relinkMode !== null) {
+                    cancelRelink(lastData.relinkMode);
+                }
+            }
+        });
+
         function refresh() { vscode.postMessage({ command: 'refresh' }); }
         function changeIndex(idx) { vscode.postMessage({ command: 'changeIndex', idx }); }
         function rename(idx) { vscode.postMessage({ command: 'rename', idx }); }
@@ -373,7 +377,7 @@
                     const relinkAction = isRelinking ? 'cancelRelink' : 'relink';
 
                     const item = document.createElement('div');
-                    item.className = 'chat-item' + (isRelinking ? ' relinking' : '') + (isBusy ? ' busy' : '');
+                    item.className = 'chat-card' + (isRelinking ? ' relinking' : '') + (isBusy ? ' busy' : '');
 
                     // Use a simple array join for the HTML to avoid any backtick/quote confusion
                     item.innerHTML = [
@@ -385,8 +389,8 @@
                         '</div>',
                         '<div class="chat-id">' + (id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED')) + '</div>',
                         '<div class="chat-duty editable" onclick="defineDuty(\'' + idx + '\')" title="Redefine Agent Role">' + duty + '</div>',
-                        '<div class="last-thought"><b>Prompt:</b> ' + lastPrompt + '</div>',
-                        '<div class="last-thought"><b>Last Output:</b> ' + lastResponse + '</div>'
+                        '<div class="last-thought"><b>Last Task</b>' + lastPrompt + '</div>',
+                        '<div class="last-thought"><b>Last Agent Response</b>' + lastResponse + '</div>'
                     ].join('');
 
                     list.appendChild(item);
