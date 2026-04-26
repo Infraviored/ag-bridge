@@ -1,14 +1,15 @@
 {
   "registry": {
-    "1": "76493180-23e7-4fff-b99f-34bc25a4a4bd",
-    "4": "260921fe-2ad0-41bb-9512-4fbf5140cb72"
+    "2": "260921fe-2ad0-41bb-9512-4fbf5140cb72",
+    "3": "c952825d-2f29-4895-bb8d-bdc3d1f36e79",
+    "4": "76493180-23e7-4fff-b99f-34bc25a4a4bd"
   },
   "chatNames": {
-    "1": "Hermano"
+    "2": "Debugger",
+    "3": "Hi sayer",
+    "4": "Ultra Long Hist"
   },
-  "ts": 1777189018659,
-  "chatDuties": {
-    "1": "Extension Builder -- build full ag extension"
-  },
+  "ts": 1777195658603,
+  "chatDuties": {},
   "cliTimeout": 10
 }

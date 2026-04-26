@@ -267,6 +267,16 @@ async function updateDashboard() {
         }
         const ws = new ws_1.default(tab.webSocketDebuggerUrl);
         ws.on('open', () => {
+            // SYNC FILE REGISTRY TO BROWSER (Source of Truth)
+            const config = loadConfig();
+            const syncScript = `(function(){
+                const fileReg = ${JSON.stringify(config.registry)};
+                const currentReg = JSON.parse(localStorage.getItem('__ag_registry') || '{}');
+                const merged = { ...currentReg, ...fileReg };
+                localStorage.setItem('__ag_registry', JSON.stringify(merged));
+                window.__chatRegistry = merged;
+            })()`;
+            ws.send(JSON.stringify({ id: 99, method: 'Runtime.evaluate', params: { expression: syncScript } }));
             ws.send(JSON.stringify({
                 id: 100,
                 method: 'Runtime.evaluate',
@@ -298,7 +308,7 @@ async function updateDashboard() {
                         continue;
                     if (pendingDeletes.has(k))
                         continue; // GUARD: Do not restore ghost agents!
-                    if (config.registry[k] !== browserState.registry[k]) {
+                    if (!config.registry[k]) {
                         config.registry[k] = browserState.registry[k];
                         changed = true;
                     }

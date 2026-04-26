@@ -4,8 +4,19 @@ window.__origFetch = _origFetch;
 
 window.__agLogs = window.__agLogs || [];
 window.__agReadLog = window.__agReadLog || [];
-window.__chatRegistry = window.__chatRegistry || {};
-window.__chatNames = window.__chatNames || {};
+// ── SHARED STATE (localStorage backed) ──────────────────────
+function getRegistry() {
+    try { return JSON.parse(localStorage.getItem('__ag_registry') || '{}'); } catch(e) { return {}; }
+}
+function setRegistry(reg) {
+    localStorage.setItem('__ag_registry', JSON.stringify(reg));
+    window.__chatRegistry = reg;
+}
+
+window.__agLogs = window.__agLogs || [];
+window.__agReadLog = window.__agReadLog || [];
+window.__chatRegistry = getRegistry();
+window.__chatNames = JSON.parse(localStorage.getItem('__ag_names') || '{}');
 window.__activeReaders = {};
 window.__activeStreamCount = 0;
 window.__cmdActive = false;
@@ -37,7 +48,10 @@ window.fetch = async function(...args) {
 
     if (urlStr.includes('StreamAgentStateUpdates')) {
         window.__activeStreamCount++;
-        log(`🌊 [PASSIVE] Stream Tap Started (#${window.__activeStreamCount})`, 'info');
+        log(`🌊 [PASSIVE] Stream Tap Started (#${window.__activeStreamCount}) | URL: ${urlStr}`, 'info');
+        if (args[1]) {
+            log(`📡 [DEBUG] Stream Options: ${JSON.stringify({ headers: args[1].headers, method: args[1].method })}`, 'debug');
+        }
         
         const cloned = res.clone();
         const reader = cloned.body.getReader();
@@ -56,13 +70,18 @@ window.fetch = async function(...args) {
                     const chunk = decoder.decode(value, { stream: true });
                     window.__agReadLog.push({ ts: Date.now(), source: 'passive', payload: chunk });
 
-                    // 🆕 AUTO-DISCOVERY OF NEW CHATS
+                    // 🆕 AUTO-DISCOVERY OF NEW CHATS (Cross-Window Safe)
                     const m = chunk.match(/"conversationId"\s*:\s*"([a-f0-9-]{36})"/);
                     if (m) {
                         activeConversationId = m[1];
-                        if (!Object.values(window.__chatRegistry).includes(activeConversationId)) {
-                            const idx = Object.keys(window.__chatRegistry).length + 1;
-                            window.__chatRegistry[idx] = activeConversationId;
+                        const reg = getRegistry();
+                        const existingValues = Object.values(reg);
+                        if (!existingValues.includes(activeConversationId)) {
+                            // Find next available numeric slot
+                            let idx = 1;
+                            while (reg[idx]) idx++;
+                            reg[idx] = activeConversationId;
+                            setRegistry(reg);
                             log(`🆕 AUTO-DISCOVERY: Chat ${idx} detected (${activeConversationId.slice(0,8)}...)`, 'success');
                         }
                     }
@@ -100,41 +119,150 @@ window.fetch = async function(...args) {
         if (body) {
             try {
                 const text = typeof body === 'string' ? body : await (new Response(body)).text();
+                const parsed = JSON.parse(text);
+                const headers = Object.fromEntries(new Headers(args[1]?.headers || {}).entries());
                 window.__agCaptured = {
                     last: Date.now(),
                     url: urlStr,
-                    headers: args[1]?.headers || {},
-                    bodyTemplate: JSON.parse(text)
+                    headers: headers,
+                    bodyTemplate: parsed
                 };
-                log(`📡 [CAPTURE] Endpoint & Headers secured.`, 'success');
-            } catch (e) {}
+                log(`📡 [CAPTURE] Endpoint Secured. CSRF: ${headers['x-codeium-csrf-token']?.slice(0,8)}...`, 'success');
+            } catch (e) {
+                log(`📡 [CAPTURE ERROR] Failed to parse body: ${e.message}`, 'error');
+            }
         }
     }
     return res;
 };
 
-// ── PROACTIVE STREAM (v5 Style) ─────────────────────────────
+// ── PROACTIVE STREAM (Wakes up background agents) ───────────
+window.activateStream = async function(conversationId) {
+    const c = window.__agCaptured;
+    if (!c) throw new Error("No context captured for proactive stream.");
+
+    log(`⚙️ [PROACTIVE] Activating stream for ${conversationId.slice(0,8)}...`, 'info');
+    
+    try {
+        const csrf = c.headers['x-codeium-csrf-token'];
+        const base = c.url.replace('SendUserCascadeMessage', 'StreamAgentStateUpdates');
+        
+        // Construct Connect-Protocol Binary Envelope
+        const json = JSON.stringify({ conversationId, subscriberId: crypto.randomUUID() });
+        const jsonBytes = new TextEncoder().encode(json);
+        const envelope = new Uint8Array(5 + jsonBytes.length);
+        
+        envelope[0] = 0x00; // Uncompressed
+        new DataView(envelope.buffer).setUint32(1, jsonBytes.length, false); // Big-Endian Length
+        envelope.set(jsonBytes, 5);
+
+        log(`📡 [PROACTIVE] POST -> ${base} (${jsonBytes.length} bytes)`, 'debug');
+
+        const res = await _origFetch(base, {
+            method: 'POST',
+            headers: {
+                ...c.headers,
+                'content-type': 'application/connect+json',
+                'connect-protocol-version': '1'
+            },
+            body: envelope
+        });
+
+        if (!res.ok) {
+            log(`❌ [PROACTIVE] Activation failed: ${res.status}`, 'error');
+            return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        window.__activeReaders = window.__activeReaders || {};
+        window.__activeReaders[conversationId] = reader;
+
+        log(`🌊 [PROACTIVE] Stream established for ${conversationId.slice(0,8)}`, 'success');
+
+        (async () => {
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        log(`🏁 [PROACTIVE] Stream closed for ${conversationId.slice(0,8)}`, 'info');
+                        break;
+                    }
+                    const chunk = decoder.decode(value, { stream: true });
+                    window.__agReadLog.push({ ts: Date.now(), source: 'proactive', conversationId, payload: chunk });
+                    
+                    // Dashboard updates for background agents
+                    if (chunk.includes('modifiedResponse')) {
+                        const text = chunk.match(/"modifiedResponse":"((?:[^"\\]|\\.)*)"/)?.[1];
+                        if (text) {
+                            const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                            const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
+                            window.__lastOutputs[conversationId] = snippet;
+                        }
+                    }
+
+                    if (chunk.includes('"CASCADE_RUN_STATUS_RUNNING"')) {
+                        window.__busyAgents[conversationId] = true;
+                    }
+                    if (chunk.includes('"CASCADE_RUN_STATUS_IDLE"')) {
+                        window.__busyAgents[conversationId] = false;
+                    }
+                    
+                    // Trace logs for debugging
+                    if (window.__agVerbose) {
+                        log(`📥 [PROACTIVE] Chunk received (${chunk.length} bytes)`, 'debug');
+                    }
+                }
+            } catch (e) {
+                log(`❌ [PROACTIVE] Read error for ${conversationId.slice(0,8)}: ${e.message}`, 'error');
+            } finally {
+                delete window.__activeReaders[conversationId];
+            }
+        })();
+    } catch (e) {
+        log(`❌ [PROACTIVE] Fatal activation error: ${e.message}`, 'error');
+    }
+};
 // ── POST AND READ (The "8s Silence" Logic) ────────────────
 window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
     const c = window.__agCaptured;
     if (!c) throw new Error("No context captured. Type one message manually.");
 
-    // BUSY GUARD: Determine conversationId from registry if possible
-    const conversationId = Object.entries(window.__chatRegistry).find(([idx]) => cascadeId.startsWith(`ag-${idx}-`))?.[1] 
-                         || Object.values(window.__chatRegistry)[0]; // Fallback to first
+    // BUSY GUARD: Determine conversationId and chatIdx from registry
+    let conversationId = cascadeId;
+    let chatIdx = "?";
+
+    const entryByValue = Object.entries(window.__chatRegistry).find(([, id]) => id === cascadeId);
+    if (entryByValue) {
+        chatIdx = entryByValue[0];
+    } else {
+        const entryByIndex = Object.entries(window.__chatRegistry).find(([idx]) => cascadeId.startsWith(`ag-${idx}-`));
+        if (entryByIndex) {
+            chatIdx = entryByIndex[0];
+            conversationId = entryByIndex[1];
+        }
+    }
+
+    if (!conversationId || conversationId.length < 10) {
+        log(`⚠️ [ORCHESTRATION] Unknown agent for cascade ${cascadeId}. Registry state: ${JSON.stringify(window.__chatRegistry)}`, 'warn');
+        throw new Error(`Agent not discovered yet. Please focus the chat for ${cascadeId} briefly or wait for auto-discovery.`);
+    }
 
     if (window.__busyAgents[conversationId]) {
         const last = window.__lastOutputs[conversationId] || "Thinking...";
-        throw new Error(`AGENT STILL WORKING. LAST OUTPUT: ${last}`);
+        throw new Error(`AGENT ${chatIdx} STILL WORKING. LAST OUTPUT: ${last}`);
     }
 
     window.__busyAgents[conversationId] = true;
     window.__lastPrompts[conversationId] = (prompt.length > 400) ? '...' + prompt.slice(-400) : prompt;
 
+    // PROACTIVE WAKEUP
+    await window.activateStream(conversationId).catch(e => log(`⚠️ Stream wakeup failed: ${e.message}`, 'warn'));
+
     log(`🧹 Purging old chunks for cascade ${cascadeId.slice(0,8)}...`);
     window.__agReadLog = window.__agReadLog.filter(x => !x.payload?.includes(cascadeId));
 
-    log(`🚀 DISPATCH: "${prompt.slice(0,40)}..."`, 'info');
+    log(`🚀 DISPATCH (Agent ${chatIdx}): "${prompt.slice(0,40)}..."`, 'info');
     const payload = { ...c.bodyTemplate, cascadeId, items: [{ text: prompt }], sentAt: new Date().toISOString() };
     
     const res = await _origFetch(c.url, {
