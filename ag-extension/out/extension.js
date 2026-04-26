@@ -43,6 +43,7 @@ const http = __importStar(require("http"));
 const ws_1 = __importDefault(require("ws"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const os = __importStar(require("os"));
 let statusBarItem;
 let dashboardPanel;
 let outputChannel;
@@ -66,31 +67,30 @@ function logToChannel(msg) {
     outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] ${msg}`);
 }
 function getConfigPath() {
-    const root = vscode.workspace.workspaceFolders?.[0].uri.fsPath || '';
-    return path.join(root, 'ag-config.json');
+    const home = os.homedir();
+    return path.join(home, '.agbridge', 'config.json');
 }
 function loadConfig() {
     const configPath = getConfigPath();
-    let config = { chatNames: {}, chatDuties: {}, registry: {} };
     if (fs.existsSync(configPath)) {
         try {
-            config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            return {
+                agents: config.agents || {},
+                settings: config.settings || { cliTimeout: 600, timeout: 180, logHeartbeat: false }
+            };
         }
-        catch { }
+        catch (e) {
+            logToChannel(`Error loading config: ${e}`);
+        }
     }
-    if (!config.chatDuties)
-        config.chatDuties = {};
-    if (!config.chatNames)
-        config.chatNames = {};
-    if (!config.registry)
-        config.registry = {};
-    return config;
+    return { agents: {}, settings: { cliTimeout: 600, timeout: 180, logHeartbeat: false } };
 }
 function saveConfig(config) {
     const configPath = getConfigPath();
-    const cliTimeout = vscode.workspace.getConfiguration('antigravity.bridge').get('cliTimeout', 10);
-    config.ts = Date.now();
-    config.cliTimeout = cliTimeout;
+    const dir = path.dirname(configPath);
+    if (!fs.existsSync(dir))
+        fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 }
 // Global CLI Command Setup
@@ -156,16 +156,21 @@ async function injectBridge() {
         const script = fs.readFileSync(finalScriptPath, 'utf8');
         const config = loadConfig();
         const verbose = vscode.workspace.getConfiguration('antigravity.bridge').get('verbose', false);
-        const timeoutMinutes = vscode.workspace.getConfiguration('antigravity.bridge').get('timeout', 1);
-        const cliTimeoutMinutes = vscode.workspace.getConfiguration('antigravity.bridge').get('cliTimeout', 10);
-        const timeoutMs = timeoutMinutes * 60 * 1000;
-        const cliTimeoutMs = cliTimeoutMinutes * 60 * 1000;
+        const registry = {};
+        const names = {};
+        const duties = {};
+        Object.entries(config.agents).forEach(([idx, a]) => {
+            registry[idx] = a.id;
+            names[idx] = a.name;
+            duties[idx] = a.duty;
+        });
         const syncScript = `
-            Object.assign(window.__chatRegistry, ${JSON.stringify(config.registry || {})});
-            Object.assign(window.__chatNames, ${JSON.stringify(config.chatNames || {})});
+            Object.assign(window.__chatRegistry, ${JSON.stringify(registry)});
+            Object.assign(window.__chatNames, ${JSON.stringify(names)});
+            Object.assign(window.__chatDuties, ${JSON.stringify(duties)});
             window.__agVerbose = ${verbose};
-            window.__agTimeout = ${timeoutMs};
-            window.__agCliTimeout = ${cliTimeoutMs};
+            window.__agTimeout = ${config.settings.timeout * 1000};
+            window.__agCliTimeout = ${config.settings.cliTimeout * 1000};
         `;
         const ws = new ws_1.default(tab.webSocketDebuggerUrl);
         ws.on('open', () => {
@@ -175,6 +180,38 @@ async function injectBridge() {
                 params: { expression: script + "\n" + syncScript }
             }));
         });
+        const server = http.createServer();
+        server.on('request', async (req, res) => {
+            const url = new URL(req.url || '/', `http://${req.headers.host}`);
+            if (url.pathname === '/cmd') {
+                const chatIndex = url.searchParams.get('idx');
+                const text = url.searchParams.get('text');
+                const reqId = url.searchParams.get('reqId');
+                const mode = url.searchParams.get('mode'); // e.g. "get-lost"
+                if (mode === 'get-lost' && chatIndex) {
+                    const tab = await getAntigravityTab();
+                    if (tab) {
+                        const ws = new ws_1.default(tab.webSocketDebuggerUrl);
+                        ws.on('open', () => {
+                            ws.send(JSON.stringify({
+                                id: 107,
+                                method: 'Runtime.evaluate',
+                                params: { expression: `JSON.parse(localStorage.getItem('__ag_outputs') || '{}')[${chatIndex}] || "No cached output found."` }
+                            }));
+                            ws.on('message', (data) => {
+                                const result = JSON.parse(data.toString());
+                                const output = result.result?.result?.value || "Error fetching cache.";
+                                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                                res.end(output);
+                                ws.close();
+                            });
+                        });
+                        return;
+                    }
+                }
+            }
+        });
+        server.listen(9223);
         ws.on('message', (data) => {
             const msg = JSON.parse(data.toString());
             if (msg.id === 1) {
@@ -233,17 +270,12 @@ async function showDashboard() {
                 const newIdx = await vscode.window.showInputBox({ prompt: `New Index for Agent ${message.idx}`, value: message.idx });
                 if (newIdx && newIdx !== message.idx) {
                     const config = loadConfig();
-                    if (config.registry[newIdx]) {
+                    if (config.agents[newIdx]) {
                         vscode.window.showErrorMessage(`Index ${newIdx} is already in use!`);
                         return;
                     }
-                    // Move data
-                    config.registry[newIdx] = config.registry[message.idx];
-                    config.chatNames[newIdx] = config.chatNames[message.idx];
-                    config.chatDuties[newIdx] = config.chatDuties[message.idx];
-                    delete config.registry[message.idx];
-                    delete config.chatNames[message.idx];
-                    delete config.chatDuties[message.idx];
+                    config.agents[newIdx] = config.agents[message.idx];
+                    delete config.agents[message.idx];
                     saveConfig(config);
                     // Push to browser
                     const tab = await getAntigravityTab();
@@ -300,66 +332,77 @@ async function updateDashboard() {
         }
         const ws = new ws_1.default(tab.webSocketDebuggerUrl);
         ws.on('open', () => {
-            // SYNC FILE REGISTRY TO BROWSER (Source of Truth)
             const config = loadConfig();
+            const registry = {};
+            const names = {};
+            const duties = {};
+            Object.entries(config.agents).forEach(([idx, a]) => {
+                registry[idx] = a.id;
+                names[idx] = a.name;
+                duties[idx] = a.duty;
+            });
             const syncScript = `(function(){
-                const fileReg = ${JSON.stringify(config.registry)};
-                const currentReg = JSON.parse(localStorage.getItem('__ag_registry') || '{}');
-                const merged = { ...currentReg, ...fileReg };
-                localStorage.setItem('__ag_registry', JSON.stringify(merged));
-                window.__chatRegistry = merged;
+                window.__chatRegistry = window.__chatRegistry || {};
+                window.__chatNames = window.__chatNames || {};
+                window.__chatDuties = window.__chatDuties || {};
+                
+                const fileReg = ${JSON.stringify(registry)};
+                const fileNames = ${JSON.stringify(names)};
+                const fileDuties = ${JSON.stringify(duties)};
+                
+                Object.assign(window.__chatRegistry, fileReg);
+                Object.assign(window.__chatNames, fileNames);
+                Object.assign(window.__chatDuties, fileDuties);
+                
+                localStorage.setItem('__ag_registry', JSON.stringify(window.__chatRegistry));
             })()`;
             ws.send(JSON.stringify({ id: 99, method: 'Runtime.evaluate', params: { expression: syncScript } }));
-            ws.send(JSON.stringify({
-                id: 100,
-                method: 'Runtime.evaluate',
-                params: { expression: 'JSON.stringify({ registry: window.__chatRegistry, names: window.__chatNames, lastOutputs: window.__lastOutputs, lastPrompts: window.__lastPrompts, busyAgents: window.__busyAgents, captured: !!window.__agCaptured?.last, relinkMode: window.__relinkMode, logs: (window.__agLogs || []).slice(' + lastLogIndex + ') })' }
-            }));
+            const evalStr = `JSON.stringify({ 
+                registry: window.__chatRegistry, 
+                names: window.__chatNames, 
+                duties: window.__chatDuties,
+                lastOutputs: window.__lastOutputs, 
+                lastPrompts: window.__lastPrompts, 
+                busyAgents: JSON.parse(localStorage.getItem('__ag_busy') || '{}'), 
+                captured: !!window.__agCaptured?.last, 
+                relinkMode: window.__relinkMode, 
+                settings: { cliTimeout: window.__agCliTimeout / 1000, timeout: window.__agTimeout / 1000, logHeartbeat: window.__agLogHeartbeat },
+                logs: (window.__agLogs || []).slice(${lastLogIndex}) 
+            })`;
+            ws.send(JSON.stringify({ id: 2, method: 'Runtime.evaluate', params: { expression: evalStr } }));
         });
         ws.on('message', (data) => {
             const msg = JSON.parse(data.toString());
-            if (msg.id === 100) {
+            if (msg.id === 2) {
                 const browserState = JSON.parse(msg.result?.result?.value || '{}');
                 const config = loadConfig();
-                if (browserState.relinkMode === null && relinkInProgress !== null) {
-                    relinkInProgress = null;
-                }
-                // PROCESS LOGS
-                if (browserState.logs && browserState.logs.length > 0) {
-                    browserState.logs.forEach((l) => logToChannel(l.msg));
-                    lastLogIndex += browserState.logs.length;
-                }
+                // Sync browser state BACK to central config if needed (e.g. relink happened in browser)
+                let changed = false;
+                Object.entries(browserState.registry).forEach(([idx, id]) => {
+                    const idStr = id;
+                    if (!config.agents[idx]) {
+                        config.agents[idx] = { id: idStr, name: `Agent ${idx}`, duty: 'General Intelligence' };
+                        changed = true;
+                    }
+                    else if (config.agents[idx].id !== idStr) {
+                        config.agents[idx].id = idStr;
+                        changed = true;
+                    }
+                });
+                if (changed)
+                    saveConfig(config);
                 // Clean up pending deletes once browser confirms they are gone
                 for (const k of Array.from(pendingDeletes)) {
                     if (!(k in browserState.registry)) {
                         pendingDeletes.delete(k);
                     }
                 }
-                let changed = false;
-                for (const k in browserState.registry) {
-                    if (relinkInProgress === k)
-                        continue;
-                    if (pendingDeletes.has(k))
-                        continue; // GUARD: Do not restore ghost agents!
-                    if (!config.registry[k]) {
-                        config.registry[k] = browserState.registry[k];
-                        changed = true;
-                    }
-                }
-                if (changed)
-                    saveConfig(config);
                 dashboardPanel?.webview.postMessage({
                     type: 'status',
                     data: {
-                        connected: true,
-                        tokenCaptured: browserState.captured,
-                        registry: { ...config.registry, ...browserState.registry },
-                        names: { ...browserState.names, ...config.chatNames },
-                        duties: config.chatDuties || {},
-                        relinkMode: browserState.relinkMode,
-                        busyAgents: browserState.busyAgents,
-                        lastOutputs: browserState.lastOutputs,
-                        lastPrompts: browserState.lastPrompts
+                        ...browserState,
+                        connected: bridgeActive,
+                        tokenCaptured: browserState.captured
                     }
                 });
                 ws.close();
@@ -372,9 +415,11 @@ async function updateDashboard() {
 }
 async function renameChat(idx) {
     const config = loadConfig();
-    const newName = await vscode.window.showInputBox({ prompt: `Name for Chat ${idx}`, value: config.chatNames[idx] || '' });
+    const newName = await vscode.window.showInputBox({ prompt: `Name for Chat ${idx}`, value: config.agents[idx]?.name || '' });
     if (newName !== undefined) {
-        config.chatNames[idx] = newName;
+        if (!config.agents[idx])
+            config.agents[idx] = { id: '', name: '', duty: '' };
+        config.agents[idx].name = newName;
         saveConfig(config);
         const tab = await getAntigravityTab();
         if (tab) {
@@ -388,9 +433,11 @@ async function renameChat(idx) {
 }
 async function defineDuty(idx) {
     const config = loadConfig();
-    const duty = await vscode.window.showInputBox({ prompt: `Role for Chat ${idx}`, value: config.chatDuties[idx] || '' });
+    const duty = await vscode.window.showInputBox({ prompt: `Role for Chat ${idx}`, value: config.agents[idx]?.duty || '' });
     if (duty !== undefined) {
-        config.chatDuties[idx] = duty;
+        if (!config.agents[idx])
+            config.agents[idx] = { id: '', name: '', duty: '' };
+        config.agents[idx].duty = duty;
         saveConfig(config);
     }
 }
@@ -399,11 +446,8 @@ async function resetAll() {
     if (confirm !== 'Yes')
         return;
     relinkInProgress = null;
-    // WIPING ABSOLUTELY EVERYTHING
     const config = loadConfig();
-    config.registry = {};
-    config.chatNames = {};
-    config.chatDuties = {};
+    config.agents = {};
     saveConfig(config);
     const tab = await getAntigravityTab();
     if (tab) {
@@ -417,8 +461,9 @@ async function resetAll() {
 async function relink(idx) {
     relinkInProgress = idx;
     const config = loadConfig();
-    const oldId = config.registry[idx] || "";
-    config.registry[idx] = "";
+    const oldId = config.agents[idx]?.id || "";
+    if (config.agents[idx])
+        config.agents[idx].id = "";
     saveConfig(config);
     const tab = await getAntigravityTab();
     if (tab) {
@@ -441,12 +486,9 @@ async function cancelRelink(idx) {
     }
 }
 async function deleteAgent(idx) {
-    // INSTANT DELETE. NO CONFIRMATION.
     const config = loadConfig();
     pendingDeletes.add(idx.toString());
-    delete config.registry[idx];
-    delete config.chatNames[idx];
-    delete config.chatDuties[idx];
+    delete config.agents[idx];
     saveConfig(config);
     const tab = await getAntigravityTab();
     if (tab) {
@@ -496,6 +538,75 @@ function activate(context) {
                 });
                 ws.on('message', (data) => {
                     const msg = JSON.parse(data.toString());
+                    if (msg.command === 'changeIndex') {
+                        const config = loadConfig();
+                        const oldIdx = msg.idx;
+                        vscode.window.showInputBox({ prompt: `New index for ${config.agents[oldIdx]?.name || 'Agent'}`, value: oldIdx }).then(newIdx => {
+                            if (newIdx && newIdx !== oldIdx) {
+                                config.agents[newIdx] = config.agents[oldIdx];
+                                delete config.agents[oldIdx];
+                                saveConfig(config);
+                                updateDashboard();
+                            }
+                        });
+                    }
+                    if (msg.command === 'rename') {
+                        const config = loadConfig();
+                        vscode.window.showInputBox({ prompt: 'Agent Name', value: config.agents[msg.idx]?.name }).then(name => {
+                            if (name) {
+                                if (!config.agents[msg.idx])
+                                    config.agents[msg.idx] = { id: '', name: '', duty: '' };
+                                config.agents[msg.idx].name = name;
+                                saveConfig(config);
+                                updateDashboard();
+                            }
+                        });
+                    }
+                    if (msg.command === 'defineDuty') {
+                        const config = loadConfig();
+                        vscode.window.showInputBox({ prompt: 'Agent Duty', value: config.agents[msg.idx]?.duty }).then(duty => {
+                            if (duty) {
+                                if (!config.agents[msg.idx])
+                                    config.agents[msg.idx] = { id: '', name: '', duty: '' };
+                                config.agents[msg.idx].duty = duty;
+                                saveConfig(config);
+                                updateDashboard();
+                            }
+                        });
+                    }
+                    if (msg.command === 'saveSettings') {
+                        const config = loadConfig();
+                        config.settings.cliTimeout = msg.settings.cliTimeout;
+                        config.settings.timeout = msg.settings.timeout;
+                        config.settings.logHeartbeat = msg.settings.logHeartbeat;
+                        saveConfig(config);
+                        // Push to browser immediately
+                        if (tab) {
+                            const ws2 = new ws_1.default(tab.webSocketDebuggerUrl);
+                            ws2.on('open', () => {
+                                ws2.send(JSON.stringify({
+                                    id: 106,
+                                    method: 'Runtime.evaluate',
+                                    params: {
+                                        expression: `localStorage.setItem('__ag_cli_timeout', '${config.settings.cliTimeout * 1000}'); localStorage.setItem('__ag_timeout', '${config.settings.timeout * 1000}'); localStorage.setItem('__ag_log_heartbeat', '${config.settings.logHeartbeat}'); window.__agLogHeartbeat = ${config.settings.logHeartbeat}; window.__agCliTimeout = ${config.settings.cliTimeout * 1000}; window.__agTimeout = ${config.settings.timeout * 1000};`
+                                    }
+                                }));
+                                ws2.on('message', () => ws2.close());
+                            });
+                        }
+                    }
+                    if (msg.command === 'resetAll') {
+                        const config = loadConfig();
+                        config.agents = {};
+                        saveConfig(config);
+                        updateDashboard();
+                    }
+                    if (msg.command === 'deleteAgent') {
+                        const config = loadConfig();
+                        delete config.agents[msg.idx];
+                        saveConfig(config);
+                        updateDashboard();
+                    }
                     if (msg.id === 200) {
                         const captured = msg.result?.result?.value;
                         updateStatusBar(captured ? BridgeState.Active : BridgeState.PromptOnce);

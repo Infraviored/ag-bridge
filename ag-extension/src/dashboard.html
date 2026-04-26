@@ -80,9 +80,14 @@
         }
 
         .chat-card.busy {
-            border-left-color: #4ec9b0;
-            box-shadow: 0 0 15px rgba(78, 201, 176, 0.2);
+            border-left: 5px solid #4ec9b0;
             animation: pulse-busy 2s infinite;
+        }
+
+        @keyframes pulse-busy {
+            0% { border-left-color: #4ec9b0; }
+            50% { border-left-color: #059669; box-shadow: 0 0 10px rgba(78, 201, 176, 0.3); }
+            100% { border-left-color: #4ec9b0; }
         }
 
         .chat-card.relinking {
@@ -104,6 +109,93 @@
                 box-shadow: 0 0 0px #f59e0b;
             }
         }
+
+        .settings-container {
+            margin-top: 20px;
+            border-top: 1px solid #333;
+            padding-top: 20px;
+        }
+
+        .collapsible {
+            background: #252526;
+            color: #9cdcfe;
+            cursor: pointer;
+            padding: 10px 15px;
+            width: 100%;
+            border: 1px solid #333;
+            text-align: left;
+            outline: none;
+            font-size: 13px;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .collapsible:after {
+            content: '\002B';
+            font-weight: bold;
+            float: right;
+        }
+
+        .collapsible.active:after {
+            content: "\2212";
+        }
+
+        .content {
+            padding: 0 15px;
+            display: none;
+            overflow: hidden;
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+        }
+
+        .settings-bar {
+            padding: 15px 0;
+            font-size: 11px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .settings-bar label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            color: #ccc;
+        }
+
+        .settings-bar input[type="number"] {
+            width: 50px;
+            background: #3c3c3c;
+            border: 1px solid #555;
+            color: white;
+            padding: 2px 5px;
+            border-radius: 2px;
+        }
+
+        #log-viewer {
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 10px;
+            padding: 10px 0;
+            color: #888;
+        }
+
+        .log-entry {
+            margin-bottom: 4px;
+            border-bottom: 1px solid #2d2d2d;
+            padding-bottom: 2px;
+        }
+
+        .log-entry.info { color: #569cd6; }
+        .log-entry.success { color: #4ec9b0; }
+        .log-entry.warn { color: #ce9178; }
+        .log-entry.error { color: #f44747; }
 
         .chat-name {
             font-weight: bold;
@@ -311,7 +403,35 @@
         <div class="status-row"><span>Gateway:</span><span id="token-status">-</span></div>
         <h3>Registry <button class="danger" onclick="resetAll()">Wipe</button></h3>
         <div id="chat-list"></div>
+        
         <button class="copy-btn" id="copy-instr-btn" onclick="copyInstructions()">📋 Copy Delegation Prompt</button>
+
+        <div class="settings-container">
+            <button class="collapsible" onclick="toggleCollapsible(this)">⚙️ Bridge Settings</button>
+            <div class="content">
+                <div class="settings-bar">
+                    <label title="Total timeout for the agent to finish its task">
+                        Session Timeout (min):
+                        <input type="number" id="setting-cli-timeout" value="10" onchange="saveSettings()">
+                    </label>
+                    <label title="Timeout for a single tool call or silence">
+                        Silence Timeout (min):
+                        <input type="number" id="setting-timeout" value="3" onchange="saveSettings()">
+                    </label>
+                    <label title="Enable detailed heartbeat logs in the browser console">
+                        <input type="checkbox" id="setting-log-heartbeat" onchange="saveSettings()">
+                        Log Heartbeats
+                    </label>
+                </div>
+            </div>
+
+            <button class="collapsible" onclick="toggleCollapsible(this)" style="margin-top: 10px;">📜 Orchestration Logs</button>
+            <div class="content">
+                <div id="log-viewer">
+                    <div style="padding: 10px; text-align: center;">Waiting for logs...</div>
+                </div>
+            </div>
+        </div>
     </div>
     <script>
         const vscode = acquireVsCodeApi();
@@ -333,13 +453,51 @@
         function relink(idx) { vscode.postMessage({ command: 'relink', idx }); }
         function cancelRelink(idx) { vscode.postMessage({ command: 'cancelRelink', idx }); }
         function deleteAgent(idx) { vscode.postMessage({ command: 'deleteAgent', idx }); }
+        
+        function toggleCollapsible(btn) {
+            btn.classList.toggle("active");
+            var content = btn.nextElementSibling;
+            if (content.style.display === "block") {
+                content.style.display = "none";
+            } else {
+                content.style.display = "block";
+            }
+        }
+        function saveSettings() {
+            const cliMin = parseFloat(document.getElementById('setting-cli-timeout').value) || 10;
+            const silenceMin = parseFloat(document.getElementById('setting-timeout').value) || 3;
+            const logHeartbeat = document.getElementById('setting-log-heartbeat').checked;
+
+            vscode.postMessage({
+                command: 'saveSettings',
+                settings: {
+                    cliTimeout: cliMin * 60,
+                    timeout: silenceMin * 60,
+                    logHeartbeat: logHeartbeat
+                }
+            });
+        }
+
         function copyInstructions() {
             if (!lastData) return;
+            const cliMin = document.getElementById('setting-cli-timeout').value || 10;
+            const silenceMin = document.getElementById('setting-timeout').value || 3;
+            
+            const prompt = `--- BRIDGE DELEGATION PROTOCOL ---
+1. You are an AGENTic worker controlled via the Antigravity Bridge.
+2. Communicate ONLY via established terminal patterns.
+3. Your execution is monitored:
+   - Session Hard Timeout: ${cliMin} minutes.
+   - Silence/Tool Timeout: ${silenceMin} minutes.
+4. If you exceed these, the Bridge will terminate the session.
+----------------------------------`;
+
             let agents = "";
             Object.keys(lastData.registry).forEach(idx => {
                 agents += '- [Agent ' + idx + ']: ' + (lastData.names[idx] || 'Agent') + ' (Primary Duty: ' + (lastData.duties[idx] || 'General Intelligence') + ')\\n';
             });
             const text = '# ANTIGRAVITY ORCHESTRATION PROTOCOL\\n\\n' +
+                prompt + '\\n\\n' +
                 'You are an orchestrator with access to specialized sub-agents via the \'agbridge\' CLI. Each agent maintains a persistent, context-aware session.\\n\\n' +
                 '## AVAILABLE AGENTS:\\n' + agents + '\\n' +
                 '## CONTROL INTERFACE:\\n' +
@@ -359,12 +517,34 @@
             const { type, data } = event.data;
             if (type === 'status') {
                 lastData = data;
-                document.getElementById('bridge-status').innerHTML = data.connected ? '<span class="indicator online"></span> Online' : '<span class="indicator offline"></span> Offline';
-                document.getElementById('token-status').innerHTML = data.tokenCaptured ? '<span class="indicator online"></span> Ready' : '<span class="indicator offline"></span> Idle';
+                if (data.settings) {
+                    document.getElementById('setting-cli-timeout').value = (data.settings.cliTimeout / 60) || 10;
+                    document.getElementById('setting-timeout').value = (data.settings.timeout / 60) || 3;
+                    document.getElementById('setting-log-heartbeat').checked = !!data.settings.logHeartbeat;
+                }
+
+                if (data.logs && data.logs.length > 0) {
+                    const viewer = document.getElementById('log-viewer');
+                    if (data.logs.length > 0 && viewer.innerText === "Waiting for logs...") viewer.innerHTML = '';
+                    
+                    data.logs.forEach(log => {
+                        const div = document.createElement('div');
+                        div.className = 'log-entry ' + (log.level || 'info');
+                        div.innerText = '[' + new Date(log.ts).toLocaleTimeString() + '] ' + log.msg;
+                        viewer.appendChild(div);
+                        viewer.scrollTop = viewer.scrollHeight;
+                    });
+                    vscode.postMessage({ command: 'ackLogs', count: data.logs.length });
+                }
+
                 const list = document.getElementById('chat-list');
                 list.innerHTML = '';
-                const allIndices = new Set([...Object.keys(data.registry), ...Object.keys(data.names), ...Object.keys(data.duties)]);
-                Array.from(allIndices).sort((a, b) => parseInt(a) - parseInt(b)).forEach(idx => {
+                
+                // Unified source: browserState now contains registry, names, duties
+                // But we should prioritize the registry as the key source
+                const allIndices = Object.keys(data.registry || {});
+                
+                allIndices.sort((a, b) => parseInt(a) - parseInt(b)).forEach(idx => {
                     const id = data.registry[idx];
                     const name = data.names[idx] || 'unnamed';
                     const duty = data.duties[idx] || 'Define role...';
@@ -373,13 +553,11 @@
                     const lastPrompt = (id && data.lastPrompts && data.lastPrompts[id]) ? data.lastPrompts[id] : 'No prompt recorded...';
                     const lastResponse = (id && data.lastOutputs && data.lastOutputs[id]) ? data.lastOutputs[id] : 'No activity recorded...';
 
-                    const relinkClass = isRelinking ? 'relinking' : '';
                     const relinkAction = isRelinking ? 'cancelRelink' : 'relink';
 
                     const item = document.createElement('div');
                     item.className = 'chat-card' + (isRelinking ? ' relinking' : '') + (isBusy ? ' busy' : '');
 
-                    // Use a simple array join for the HTML to avoid any backtick/quote confusion
                     item.innerHTML = [
                         '<button class="delete-btn" onclick="deleteAgent(\'' + idx + '\')" title="Delete Agent">×</button>',
                         '<button class="relink-btn ' + (isRelinking ? 'active' : '') + '" onclick="' + relinkAction + '(\'' + idx + '\')" title="' + (isRelinking ? 'Cancel Relink' : 'Relink to current chat') + '">🔗</button>',

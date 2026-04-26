@@ -12,17 +12,30 @@ function setRegistry(reg) {
     localStorage.setItem('__ag_registry', JSON.stringify(reg));
     window.__chatRegistry = reg;
 }
+function getBusyState() {
+    try { return JSON.parse(localStorage.getItem('__ag_busy') || '{}'); } catch(e) { return {}; }
+}
+function setBusyState(busy) {
+    localStorage.setItem('__ag_busy', JSON.stringify(busy));
+    window.__busyAgents = busy;
+    if (window.__agVerbose) {
+        log(`⚙️ [STATE] Busy status updated: ${JSON.stringify(busy)}`, 'debug');
+    }
+}
 
 window.__agLogs = window.__agLogs || [];
 window.__agReadLog = window.__agReadLog || [];
 window.__chatRegistry = getRegistry();
 window.__chatNames = JSON.parse(localStorage.getItem('__ag_names') || '{}');
+window.__busyAgents = getBusyState();
 window.__activeReaders = {};
 window.__activeStreamCount = 0;
 window.__cmdActive = false;
 window.__lastOutputs = window.__lastOutputs || {};
 window.__lastPrompts = window.__lastPrompts || {};
-window.__busyAgents = window.__busyAgents || {};
+window.__agLogHeartbeat = localStorage.getItem('__ag_log_heartbeat') === 'true';
+window.__agCliTimeout = parseInt(localStorage.getItem('__ag_cli_timeout') || '600000');
+window.__agTimeout = parseInt(localStorage.getItem('__ag_timeout') || '180000');
 
 // ── VERBOSE LOGGING ─────────────────────────────────────────
 function log(msg, level = 'info') {
@@ -60,6 +73,7 @@ window.fetch = async function(...args) {
     if (urlStr.includes('StreamAgentStateUpdates')) {
         window.__activeStreamCount++;
         log(`🌊 [PASSIVE] Stream Tap Started (#${window.__activeStreamCount}) | URL: ${urlStr}`, 'info');
+        log(`👀 [USER ACTIVITY] Manual tab switch or chat hydration detected.`, 'info');
         if (args[1]) {
             log(`📡 [DEBUG] Stream Options: ${JSON.stringify({ headers: args[1].headers, method: args[1].method })}`, 'debug');
         }
@@ -222,10 +236,14 @@ window.activateStream = async function(conversationId) {
                     }
 
                     if (chunk.includes('"CASCADE_RUN_STATUS_RUNNING"')) {
-                        window.__busyAgents[conversationId] = true;
+                        const busy = getBusyState();
+                        busy[conversationId] = true;
+                        setBusyState(busy);
                     }
                     if (chunk.includes('"CASCADE_RUN_STATUS_IDLE"')) {
-                        window.__busyAgents[conversationId] = false;
+                        const busy = getBusyState();
+                        busy[conversationId] = false;
+                        setBusyState(busy);
                     }
                     
                     // Trace logs for debugging
@@ -273,7 +291,10 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
         throw new Error(`AGENT ${chatIdx} STILL WORKING. LAST OUTPUT: ${last}`);
     }
 
-    window.__busyAgents[conversationId] = true;
+    const busy = getBusyState();
+    busy[conversationId] = true;
+    setBusyState(busy);
+
     window.__lastPrompts[conversationId] = (prompt.length > 400) ? '...' + prompt.slice(-400) : prompt;
 
     // PROACTIVE WAKEUP
@@ -304,17 +325,22 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
     return new Promise((resolve, reject) => {
         const iv = setInterval(() => {
             const now = Date.now();
-            const relevant = window.__agReadLog.filter(x => x.ts >= sentAt && x.payload?.includes(cascadeId));
+            const allRelevant = window.__agReadLog.filter(x => x.ts >= sentAt && x.payload?.includes(cascadeId));
+            
+            // 🛡️ REPLAY PROTECTION: If we have proactive data, ignore passive (which may be history replay)
+            const proactive = allRelevant.filter(x => x.source === 'proactive');
+            const relevant = proactive.length > 0 ? proactive : allRelevant;
 
             for (const ch of relevant) {
                 lastChunkTs = Math.max(lastChunkTs, ch.ts);
                 if (ch.payload.includes('"CASCADE_RUN_STATUS_RUNNING"')) lastRunningTs = ch.ts;
                 if (ch.payload.includes('"CASCADE_RUN_STATUS_IDLE"'))    lastIdleTs = ch.ts;
                 
-                // ⚡ FAST-EXIT SIGNAL DETECTION
-                if (ch.payload.includes('"terminationReason"') || ch.payload.includes('"artifactSnapshotsUpdate"')) {
+                // ⚡ FAST-EXIT SIGNAL DETECTION (Strictly trust proactive if available)
+                const canTrust = proactive.length > 0 ? (ch.source === 'proactive') : true;
+                if (canTrust && (ch.payload.includes('"terminationReason"') || ch.payload.includes('"artifactSnapshotsUpdate"'))) {
                     if (!isFastExit) {
-                        log(`⚡ FAST-EXIT: Termination signal detected! Resolving...`, 'success');
+                        log(`⚡ FAST-EXIT: Termination signal detected (${ch.source})! Resolving...`, 'success');
                         isFastExit = true;
                     }
                 }
@@ -324,7 +350,7 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
             const silenceTime = lastChunkTs > 0 ? (now - lastChunkTs) : (now - sentAt);
             const canResolve = isFastExit || (isIdle && (silenceTime > SILENCE_MS));
 
-            if ((now - sentAt) % 2500 < 600 && !isFastExit) {
+            if (window.__agLogHeartbeat && (now - sentAt) % 2500 < 600 && !isFastExit) {
                 const state = lastRunningTs > lastIdleTs ? 'RUNNING' : (lastIdleTs > 0 ? 'IDLE' : 'WAITING');
                 const suffix = state === 'RUNNING' ? ` (Waiting for tool... ${((globalTimeoutMs - (now - sentAt))/1000).toFixed(0)}s left)` : ` (Silence: ${(silenceTime/1000).toFixed(1)}s/${SILENCE_MS/1000}s)`;
                 log(`⏳ HEARTBEAT: Chunks=${relevant.length} | State=${state}${suffix}`, 'debug');
@@ -359,7 +385,9 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
             }
         }, 500);
     }).finally(() => {
-        window.__busyAgents[conversationId] = false;
+        const busy = getBusyState();
+        busy[conversationId] = false;
+        setBusyState(busy);
     });
 };
 
