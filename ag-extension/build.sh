@@ -31,7 +31,7 @@ rm -f ag-bridge-extension.vsix
 
 # 5. Install
 echo "🚚 Installing to Profiles..."
-antigravity --install-extension ag-bridge-extension.vsix
-antigravity --user-data-dir /home/schneider/.config/Antigravity-B --install-extension ag-bridge-extension.vsix
+antigravity --install-extension ag-bridge-extension.vsix --force
+antigravity --user-data-dir /home/schneider/.config/Antigravity-B --install-extension ag-bridge-extension.vsix --force
 
 echo "✨ SUCCESS: Antigravity Bridge updated!"

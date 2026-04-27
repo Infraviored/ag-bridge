@@ -528,7 +528,7 @@ async function deleteAgent(idx) {
     }
 }
 function getDashboardHtml(webview, extensionPath) {
-    const iconPath = vscode.Uri.file(path.join(extensionPath, 'agbridge-icon.png'));
+    const iconPath = vscode.Uri.file(path.join(extensionPath, 'assets', 'agbridge-icon.png'));
     const iconUri = webview.asWebviewUri(iconPath);
     const htmlPath = path.join(extensionPath, 'src', 'dashboard.html');
     let html = fs.readFileSync(htmlPath, 'utf8');

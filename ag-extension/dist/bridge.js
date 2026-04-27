@@ -22,12 +22,27 @@ function setBusyState(busy) {
     window.__busyAgents = busy;
 }
 
+window.__agId = Math.random().toString(36).substring(7);
 window.__agLogs = window.__agLogs || [];
 window.__agReadLog = window.__agReadLog || [];
 window.__chatRegistry = getRegistry();
 window.__chatNames = JSON.parse(localStorage.getItem('__ag_names') || '{}');
-window.__busyAgents = {}; // BOOT WIPE: Clear all ghosts on load
-setBusyState({});
+
+// ── STARTUP SANITIZER (Only clear VERY old ghosts, e.g. > 30 mins) ──
+function sanitizeBusyState() {
+    const busy = getBusyState();
+    const now = Date.now();
+    let changed = false;
+    for (const id in busy) {
+        // If an entry has no timestamp or is > 30 mins old, it's likely a ghost from a previous crash
+        if (!busy[id].startTime || (now - busy[id].startTime > 30 * 60 * 1000)) {
+            delete busy[id];
+            changed = true;
+        }
+    }
+    if (changed) setBusyState(busy);
+}
+sanitizeBusyState();
 
 // Clear stale command mailboxes
 localStorage.removeItem('__cmd');
@@ -306,12 +321,13 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
     }
 
     if (window.__busyAgents[conversationId]) {
+        const busyInfo = window.__busyAgents[conversationId];
         const last = window.__lastOutputs[conversationId] || "Thinking...";
-        throw new Error(`AGENT ${chatIdx} STILL WORKING. LAST OUTPUT: ${last}`);
+        throw new Error(`AGENT ${chatIdx} STILL WORKING (Window: ${busyInfo.windowId}). LAST OUTPUT: ${last}`);
     }
 
     const busy = getBusyState();
-    busy[conversationId] = true;
+    busy[conversationId] = { status: 'RUNNING', windowId: window.__agId, startTime: Date.now() };
     setBusyState(busy);
 
     window.__lastPrompts[conversationId] = (prompt.length > 400) ? '...' + prompt.slice(-400) : prompt;
@@ -429,7 +445,7 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
         }, 500);
     }).finally(() => {
         const busy = getBusyState();
-        busy[conversationId] = false;
+        delete busy[conversationId];
         setBusyState(busy);
     });
 };

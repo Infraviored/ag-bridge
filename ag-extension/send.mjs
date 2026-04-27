@@ -4,18 +4,20 @@ import { readFileSync, existsSync } from 'fs';
 import WebSocket from 'ws';
 
 const arg1 = process.argv[2];
+const isInspectMode = process.argv.includes('--inspect');
 const isLastMode = process.argv.includes('--last');
 const allFlag = process.argv.includes('--all');
 let text = "";
 
-if (!arg1) {
+if (!arg1 && !isInspectMode) {
   console.error('Usage: agbridge <index|name> "Message" [--all]');
   console.error('Usage: agbridge <index|name> --last');
+  console.error('Usage: agbridge --inspect');
   process.exit(1);
 }
 
-if (!isLastMode) {
-  text = process.argv.slice(3).filter(a => a !== '--all').join(' ');
+if (!isLastMode && !isInspectMode) {
+  text = process.argv.slice(3).filter(a => a !== '--all' && a !== '--inspect').join(' ');
   if (!text) {
     console.error('Error: No prompt provided. Use --last to fetch the last output.');
     process.exit(1);
@@ -35,15 +37,17 @@ if (existsSync(configPath)) {
 }
 
 let chatIndex;
-if (!isNaN(parseInt(arg1))) {
-  chatIndex = parseInt(arg1);
-} else {
-  const found = Object.entries(agents).find(([, a]) => a.name === arg1);
-  if (!found) { console.error(`Chat "${arg1}" nicht gefunden.`); process.exit(1); }
-  chatIndex = parseInt(found[0]);
+let displayName = "";
+if (!isInspectMode) {
+  if (!isNaN(parseInt(arg1))) {
+    chatIndex = parseInt(arg1);
+  } else {
+    const found = Object.entries(agents).find(([, a]) => a.name === arg1);
+    if (!found) { console.error(`Chat "${arg1}" nicht gefunden.`); process.exit(1); }
+    chatIndex = parseInt(found[0]);
+  }
+  displayName = agents[chatIndex]?.name || `chat${chatIndex}`;
 }
-
-const displayName = agents[chatIndex]?.name || `chat${chatIndex}`;
 const chatAgent = agents[chatIndex];
 const chatID = chatAgent?.id;
 
@@ -54,6 +58,29 @@ if (!tab) { console.error('Tab nicht gefunden!'); process.exit(1); }
 const ws = new WebSocket(tab.webSocketDebuggerUrl);
 
 ws.on('open', () => {
+  if (isInspectMode) {
+    ws.send(JSON.stringify({
+      id: 10, method: 'Runtime.evaluate',
+      params: { expression: `JSON.stringify({ 
+        busy: JSON.parse(localStorage.getItem('__ag_busy') || '{}'),
+        registry: JSON.parse(localStorage.getItem('__ag_registry') || '{}'),
+        windowId: window.__agId
+      })` }
+    }));
+    ws.on('message', data => {
+      const msg = JSON.parse(data);
+      if (msg.id === 10) {
+        const state = JSON.parse(msg.result?.result?.value || '{}');
+        console.log(`\x1b[33m--- BRIDGE INSPECTOR (Window: ${state.windowId}) ---\x1b[0m`);
+        console.log(`\x1b[36mRegistry:\x1b[0m`, JSON.stringify(state.registry, null, 2));
+        console.log(`\x1b[35mBusy Agents:\x1b[0m`, JSON.stringify(state.busy, null, 2));
+        ws.close();
+        process.exit(0);
+      }
+    });
+    return;
+  }
+
   if (isLastMode) {
     ws.send(JSON.stringify({
       id: 1, method: 'Runtime.evaluate',
