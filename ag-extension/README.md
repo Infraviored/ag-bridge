@@ -5,6 +5,7 @@ The Antigravity Bridge is designed to **break the browser sandbox**. It enables 
 ## 🔓 Unlimited Freedom
 Traditional AI chat interfaces are trapped behind a browser UI. This bridge transforms Antigravity into a **headless orchestration engine**. 
 *   **Delegate Tasks**: An external agent can spawn sub-tasks across multiple specialized Antigravity agents.
+*   **True Parallelism**: Command multiple agents simultaneously. The Bridge handles concurrent execution without session interference.
 *   **Deep Supervision**: Use the `--all` flag to audit the internal reasoning and tool-calling of Antigravity agents from your CLI.
 
 ## 🛠 Prerequisites
@@ -44,6 +45,12 @@ The VS Code dashboard acts as your orchestration hub:
 2.  **Activate** the extension in VS Code and open the Dashboard (Zap Icon).
 3.  **Prime** the connection by sending one manual message in any Antigravity chat.
 4.  **Unleash**: Use your external CLI agent to command the bridge.
+5.  **Scale**: Run multiple `agbridge` commands in parallel for complex multi-agent workflows.
+
+## 🧪 Testing
+
+The Bridge includes a test suite in the `tests/` directory:
+- `tests/parallel_test.sh`: Verifies that multiple agents can be commanded concurrently without collisions.
 
 ---
 *Built for the age of agentic collaboration. Break the UI. Command the terminal.*

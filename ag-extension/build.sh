@@ -9,12 +9,12 @@ echo "🚀 Starting Antigravity Bridge Build (v$VERSION)..."
 echo "🔨 Compiling TypeScript..."
 npm run compile
 
-# 2. Force Copy bridge.js and icon.png to dist
+# 2. Force Copy bridge.js and assets to dist
 echo "📂 Syncing assets to dist..."
 mkdir -p dist
 cp src/bridge.js dist/bridge.js
-cp icon.png dist/icon.png
-cp agbridge-icon.png dist/agbridge-icon.png
+cp assets/icon.png dist/icon.png
+cp assets/agbridge-icon.png dist/agbridge-icon.png
 
 # 3. Apply the Node 18 Hotpatch
 echo "🩹 Applying environment patches (undici fix)..."
