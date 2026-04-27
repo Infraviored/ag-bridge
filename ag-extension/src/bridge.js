@@ -1,5 +1,5 @@
 // 🚀 ANTIGRAVITY BRIDGE ORCHESTRATOR
-const VERSION = '28.0';
+const VERSION = '1.0.0';
 
 const _origFetch = window.fetch;
 window.__origFetch = _origFetch;
