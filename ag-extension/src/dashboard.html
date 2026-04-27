@@ -85,21 +85,20 @@
             overflow: hidden;
         }
 
-        .chat-card.busy {
-            border-left: 5px solid #4ec9b0;
-            animation: pulse-busy 2s infinite;
+        .chat-card.busy { 
+            border-left: 5px solid #4ec9b0; 
+            animation: pulse-busy 2s infinite; 
         }
+        .chat-card.relinking { border-color: #f59e0b; border-style: dashed; }
+        .chat-card.expired { border-left: 5px solid #f44747; }
+        
+        .index-badge.busy { background: #4ec9b0; }
+        .index-badge.expired { background: #f44747; }
 
         @keyframes pulse-busy {
-            0% { border-left-color: #4ec9b0; }
-            50% { border-left-color: #059669; box-shadow: 0 0 10px rgba(78, 201, 176, 0.3); }
-            100% { border-left-color: #4ec9b0; }
-        }
-
-        .chat-card.relinking {
-            border-left-color: #f59e0b;
-            background: rgba(245, 158, 11, 0.05);
-            animation: pulse 2s infinite;
+            0% { border-left-color: rgba(78, 201, 176, 0.4); }
+            50% { border-left-color: #4ec9b0; }
+            100% { border-left-color: rgba(78, 201, 176, 0.4); }
         }
 
         @keyframes pulse {
@@ -502,6 +501,25 @@
         function cancelRelink(idx) { vscode.postMessage({ command: 'cancelRelink', idx }); }
         function deleteAgent(idx) { vscode.postMessage({ command: 'deleteAgent', idx }); }
         
+        function formatLastResponse(res) {
+            if (!res) return '';
+            const ts = typeof res === 'string' ? null : res.ts;
+            if (!ts) return '';
+            
+            const date = new Date(ts);
+            const now = new Date();
+            const diff = now.getTime() - date.getTime();
+            const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            
+            if (diff < 86400000 && date.getDate() === now.getDate()) {
+                return timeStr;
+            } else if (diff < 172800000) {
+                return 'Yesterday ' + timeStr;
+            } else {
+                return date.toLocaleDateString() + ' ' + timeStr;
+            }
+        }
+
         function toggleCollapsible(btn) {
             btn.classList.toggle("active");
             var content = btn.nextElementSibling;
@@ -623,8 +641,11 @@ GUIDELINES:
                     const duty = data.duties[idx] || 'Define role...';
                     const isRelinking = (data.relinkMode == idx);
                     const isBusy = id && data.busyAgents && data.busyAgents[id];
+                    const isExpired = id && data.quotas && data.quotas[id];
                     const lastPrompt = (id && data.lastPrompts && data.lastPrompts[id]) ? data.lastPrompts[id] : 'No prompt recorded...';
-                    const lastResponse = (id && data.lastOutputs && data.lastOutputs[id]) ? data.lastOutputs[id] : 'No activity recorded...';
+                    const lastResponseData = (id && data.lastOutputs && data.lastOutputs[id]) ? data.lastOutputs[id] : null;
+                    const lastResponseText = typeof lastResponseData === 'string' ? lastResponseData : (lastResponseData?.text || 'No activity recorded...');
+                    const lastResponseTime = formatLastResponse(lastResponseData);
 
                     let item = list.querySelector(`[data-idx="${idx}"]`);
                     if (!item) {
@@ -635,7 +656,7 @@ GUIDELINES:
                     }
 
                     // Update classes without destroying the element (preserves animations)
-                    item.className = 'chat-card' + (isRelinking ? ' relinking' : '') + (isBusy ? ' busy' : '');
+                    item.className = 'chat-card' + (isRelinking ? ' relinking' : '') + (isBusy ? ' busy' : '') + (isExpired ? ' expired' : '');
 
                     const relinkAction = isRelinking ? 'cancelRelink' : 'relink';
                     const relinkImg = '<img src="${linkIconUri}" width="14" style="vertical-align: middle; opacity: 0.8;">';
@@ -644,14 +665,16 @@ GUIDELINES:
                     item.innerHTML = [
                         '<button class="delete-btn" onclick="deleteAgent(\'' + idx + '\')" title="Delete Agent">×</button>',
                         '<button class="relink-btn ' + (isRelinking ? 'active' : '') + '" onclick="' + relinkAction + '(\'' + idx + '\')" title="' + (isRelinking ? 'Cancel Relink' : 'Relink to current chat') + '">' + relinkImg + '</button>',
-                        '<div style="display: flex; align-items: center; margin-bottom: 5px;">',
-                        '<span class="index-badge ' + (isRelinking ? 'relinking' : '') + '" onclick="changeIndex(\'' + idx + '\')" title="Change Agent Index">Agent ' + idx + '</span>',
+                        '<div style="display: flex; align-items: center; margin-bottom: 5px; justify-content: space-between;">',
+                        '<div>',
+                        '<span class="index-badge ' + (isRelinking ? 'relinking' : '') + (isBusy ? ' busy' : '') + (isExpired ? ' expired' : '') + '" onclick="changeIndex(\'' + idx + '\')" title="Change Agent Index">Agent ' + idx + '</span>',
                         '<span class="chat-name editable" onclick="rename(\'' + idx + '\')" title="Rename Agent">' + name + '</span>',
+                        '</div>',
                         '</div>',
                         '<div class="chat-id">' + (id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED')) + '</div>',
                         '<div class="chat-duty editable" onclick="defineDuty(\'' + idx + '\')" title="Redefine Agent Role">' + duty + '</div>',
                         '<div class="last-thought"><b>Last Task</b>' + lastPrompt + '</div>',
-                        '<div class="last-thought"><b>Last Agent Response</b>' + lastResponse + '</div>'
+                        '<div class="last-thought"><b>Last Response</b> ' + (lastResponseTime ? '<small style="opacity:0.5; float:right; font-weight:normal;">' + lastResponseTime + '</small>' : '') + '<br>' + lastResponseText + '</div>'
                     ].join('');
                 });
             }

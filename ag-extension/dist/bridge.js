@@ -21,11 +21,19 @@ function setBusyState(busy) {
     localStorage.setItem('__ag_busy', JSON.stringify(busy));
     window.__busyAgents = busy;
 }
+function getQuotas() {
+    try { return JSON.parse(localStorage.getItem('__ag_quotas') || '{}'); } catch(e) { return {}; }
+}
+function setQuotas(q) {
+    localStorage.setItem('__ag_quotas', JSON.stringify(q));
+    window.__agentQuotas = q;
+}
 
 window.__agId = Math.random().toString(36).substring(7);
 window.__agLogs = window.__agLogs || [];
 window.__agReadLog = window.__agReadLog || [];
 window.__chatRegistry = getRegistry();
+window.__agentQuotas = getQuotas();
 window.__chatNames = JSON.parse(localStorage.getItem('__ag_names') || '{}');
 
 // ── STARTUP SANITIZER (Only clear VERY old ghosts, e.g. > 30 mins) ──
@@ -169,7 +177,7 @@ window.fetch = async function(...args) {
                         if (text && activeConversationId) {
                             const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                             const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
-                            window.__lastOutputs[activeConversationId] = snippet;
+                            window.__lastOutputs[activeConversationId] = { text: snippet, ts: Date.now() };
                         }
                     }
 
@@ -274,7 +282,7 @@ window.activateStream = async function(conversationId) {
                         if (text) {
                             const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                             const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
-                            window.__lastOutputs[conversationId] = snippet;
+                            window.__lastOutputs[conversationId] = { text: snippet, ts: Date.now() };
                         }
                     }
 
@@ -356,6 +364,11 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
     try {
         const clonedRes = res.clone();
         const json = await clonedRes.json();
+        
+        // 🚨 PERMANENT TRAP FOR SERVER JSON
+        log(`🚨 POST RESPONSE JSON CAPTURED:`, 'magenta');
+        console.log(json);
+        
         activeTrajectoryId = json.update?.trajectoryId;
         if (activeTrajectoryId) {
             window.__activeTrajectories[conversationId] = activeTrajectoryId;
@@ -390,15 +403,35 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
             const relevant = proactive.length > 0 ? proactive : allRelevant;
 
             for (const ch of relevant) {
+                // 🛡️ REPLAY POLLUTION GUARD: Peek for internal timestamp
+                const internalTsStr = ch.payload.match(/"sentAt"\s*:\s*"([^"]+)"/)?.[1];
+                const internalTs = internalTsStr ? new Date(internalTsStr).getTime() : 0;
+                
+                // If the chunk is internally dated BEFORE our POST (with 5s buffer), it's a replay.
+                if (internalTs > 0 && internalTs < sentAt - 5000) {
+                    continue; 
+                }
+
                 lastChunkTs = Math.max(lastChunkTs, ch.ts);
                 if (ch.payload.includes('"CASCADE_RUN_STATUS_RUNNING"')) lastRunningTs = ch.ts;
                 if (ch.payload.includes('"CASCADE_RUN_STATUS_IDLE"'))    lastIdleTs = ch.ts;
                 
                 // ⚡ FAST-EXIT SIGNAL DETECTION (Strictly trust proactive if available)
                 const canTrust = proactive.length > 0 ? (ch.source === 'proactive') : true;
-                if (canTrust && (ch.payload.includes('"terminationReason"') || ch.payload.includes('"artifactSnapshotsUpdate"'))) {
+                if (canTrust && ch.payload.includes('"terminationReason"')) {
+                    
+                    // 💰 QUOTA DETECTION
+                    if (ch.payload.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
+                        const q = getQuotas();
+                        q[cascadeId] = true;
+                        setQuotas(q);
+                    } else if (ch.payload.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
+                        const q = getQuotas();
+                        if (q[cascadeId]) { delete q[cascadeId]; setQuotas(q); }
+                    }
+
                     if (!isFastExit) {
-                        log(`⚡ FAST-EXIT: Termination signal detected (${ch.source})! Resolving...`, 'success');
+                        log(`⚡ FAST-EXIT: Termination signal detected! (Source: ${ch.source}, InternalTs: ${internalTsStr || 'unknown'})`, 'success');
                         isFastExit = true;
                     }
                 }
@@ -416,6 +449,28 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
 
             if (canResolve) {
                 clearInterval(iv);
+
+                // 🧟 GHOST WORK MONITOR: Audit if the agent continues working after "terminationReason"
+                if (isFastExit) {
+                    const exitTs = Date.now();
+                    const ghostIv = setInterval(() => {
+                        const now = Date.now();
+                        if (now - exitTs > 30000) { clearInterval(ghostIv); return; }
+                        
+                        const leaked = window.__agReadLog.filter(x => 
+                            x.ts > exitTs && !x.__reported &&
+                            x.payload?.includes(cascadeId) && 
+                            (activeTrajectoryId ? x.payload?.includes(activeTrajectoryId) : true) &&
+                            x.payload?.includes('"modifiedResponse"')
+                        );
+                        
+                        if (leaked.length > 0) {
+                            log(`🚨 GHOST WORK DETECTED! Agent ${chatIdx} sent ${leaked.length} chunks AFTER termination signal.`, 'error');
+                            leaked.forEach(x => x.__reported = true);
+                        }
+                    }, 1000);
+                }
+
                 const fullText = relevant.map(x => x.payload).join('');
                 const matches = [...fullText.matchAll(/"(?:modifiedResponse|text)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)];
                 const raw = matches.map(m => m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
@@ -430,6 +485,14 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
                 }
 
                 const steps = raw.filter((r, i) => !raw.some((other, j) => j > i && other.startsWith(r) && other.length > r.length));
+                
+                // 💰 QUOTA DETECTION: If error reason is found and we have no real response, it's a quota wall.
+                if (fullText.includes('"EXECUTOR_TERMINATION_REASON_ERROR"') && steps.length < 2) {
+                    log(`✅ RESOLVED: QUOTA EXCEEDED signal captured.`, 'success');
+                    resolve("QUOTA EXCEEDED");
+                    return;
+                }
+
                 const finalAnswer = allSteps ? steps.join('\n\n---\n\n') : (steps.at(-1) || '');
                 log(`✅ RESOLVED: ${steps.length} steps captured.`, 'success');
                 resolve(finalAnswer);

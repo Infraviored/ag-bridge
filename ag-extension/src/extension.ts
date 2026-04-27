@@ -391,6 +391,7 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
                     lastOutputs: window.__lastOutputs, 
                     lastPrompts: window.__lastPrompts, 
                     busyAgents: JSON.parse(localStorage.getItem('__ag_busy') || '{}'), 
+                    quotas: JSON.parse(localStorage.getItem('__ag_quotas') || '{}'),
                     captured: !!window.__agCaptured?.last, 
                     relinkMode: window.__relinkMode, 
                     settings: { cliTimeout: window.__agCliTimeout / 1000, timeout: window.__agTimeout / 1000, logHeartbeat: window.__agLogHeartbeat }
