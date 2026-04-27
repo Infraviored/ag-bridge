@@ -76,24 +76,49 @@ function saveConfig(config: BridgeConfig) {
 // Global CLI Command Setup
 function setupGlobalCommand(extensionPath: string) {
     try {
-        const binDir = path.join(process.env.HOME || '', '.local', 'bin');
-        if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
+        // Try multiple standard local bin directories
+        const home = process.env.HOME || '';
+        const candidateDirs = [
+            path.join(home, '.local', 'bin'),
+            path.join(home, 'bin'),
+            path.join(home, '.cargo', 'bin')
+        ];
+
+        let successDir = '';
         const scriptPath = path.join(extensionPath, 'send.mjs');
-        const linkPath = path.join(binDir, 'agbridge');
         if (fs.existsSync(scriptPath)) fs.chmodSync(scriptPath, '755');
-        if (fs.existsSync(linkPath)) {
+
+        for (const binDir of candidateDirs) {
             try {
-                const existing = fs.readlinkSync(linkPath);
-                if (existing !== scriptPath) {
-                    fs.unlinkSync(linkPath);
+                if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
+                
+                const linkPath = path.join(binDir, 'agbridge');
+                if (fs.existsSync(linkPath)) {
+                    try {
+                        const existing = fs.readlinkSync(linkPath);
+                        if (existing !== scriptPath) {
+                            fs.unlinkSync(linkPath);
+                            fs.symlinkSync(scriptPath, linkPath);
+                        }
+                    } catch (e) {
+                        fs.unlinkSync(linkPath);
+                        fs.symlinkSync(scriptPath, linkPath);
+                    }
+                } else {
                     fs.symlinkSync(scriptPath, linkPath);
                 }
+                successDir = binDir;
+                break; // Stop at first successful setup
             } catch (e) {
-                fs.unlinkSync(linkPath);
-                fs.symlinkSync(scriptPath, linkPath);
+                // Try next directory if this one is not writable
+                continue;
             }
+        }
+
+        if (successDir) {
+            logToChannel(`✨ agbridge CLI linked to ${successDir}`);
         } else {
-            fs.symlinkSync(scriptPath, linkPath);
+            logToChannel(`[ERROR] Global command setup failed: Could not write to any local bin directory.`);
         }
     } catch (e) {
         logToChannel(`[ERROR] Global command setup failed: ${e}`);

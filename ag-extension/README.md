@@ -20,7 +20,14 @@ antigravity --remote-debugging-port=9222
 Use the symmetrical `.desktop` launcher provided in `~/links/local_applications/antigravity.desktop`. It automatically enables the debug port for both Profile A and B.
 
 ### 3. CLI PATH Requirement
-The `agbridge` command is installed to `~/.local/bin/`. Ensure this is in your `$PATH`.
+The `agbridge` command is automatically linked to your local bin (usually `~/.local/bin/` or `~/.cargo/bin/`). 
+
+**Check your PATH**:
+If `agbridge: command not found`, ensure your local bin is in your shell's PATH:
+```bash
+# Add to your .bashrc or .zshrc
+export PATH="$HOME/.local/bin:$PATH"
+```
 
 ## 💻 The Power Command: `agbridge`
 
