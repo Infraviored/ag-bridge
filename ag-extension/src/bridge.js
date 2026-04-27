@@ -1,4 +1,6 @@
-// ANTIGRAVITY BRIDGE SCRIPT v26 — STATE-AWARE
+// 🚀 ANTIGRAVITY BRIDGE ORCHESTRATOR
+const VERSION = '28.0';
+
 const _origFetch = window.fetch;
 window.__origFetch = _origFetch;
 
@@ -24,7 +26,16 @@ window.__agLogs = window.__agLogs || [];
 window.__agReadLog = window.__agReadLog || [];
 window.__chatRegistry = getRegistry();
 window.__chatNames = JSON.parse(localStorage.getItem('__ag_names') || '{}');
-window.__busyAgents = getBusyState();
+window.__busyAgents = {}; // BOOT WIPE: Clear all ghosts on load
+setBusyState({});
+
+// Clear stale command mailboxes
+localStorage.removeItem('__cmd');
+for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('__ag_cmd_')) localStorage.removeItem(key);
+}
+
 window.__activeReaders = {};
 window.__activeStreamCount = 0;
 window.__cmdActive = false;
@@ -33,6 +44,23 @@ window.__lastPrompts = window.__lastPrompts || {};
 window.__agLogHeartbeat = localStorage.getItem('__ag_log_heartbeat') === 'true';
 window.__agCliTimeout = parseInt(localStorage.getItem('__ag_cli_timeout') || '600000');
 window.__agTimeout = parseInt(localStorage.getItem('__ag_timeout') || '180000');
+
+// ── GARBAGE COLLECTOR (Response TTL Sweeper) ──────────────────
+setInterval(() => {
+    let count = 0;
+    const now = Date.now();
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('__res_')) {
+            // Sweep everything. In production we'd check timestamps, 
+            // but since agbridge is sync, any __res_ in localStorage 
+            // that isn't picked up in 60s is junk.
+            localStorage.removeItem(key);
+            count++;
+        }
+    }
+    if (count > 0 && window.__agVerbose) log(`🧹 GC: Purged ${count} stale responses.`, 'debug');
+}, 60000);
 
 // ── VERBOSE LOGGING ─────────────────────────────────────────
 function log(msg, level = 'info') {
@@ -49,7 +77,7 @@ function log(msg, level = 'info') {
     console.log(`%c${entry.msg}`, styles[level] || styles.info);
 }
 
-console.log('%c🚀 Bridge v26 loaded — STATE-AWARE ORCHESTRATION', 'color:magenta; font-weight:bold; font-size:14px');
+console.log(`%c🚀 Bridge v${VERSION} loaded — TRUE PARALLELISM`, 'color:magenta; font-weight:bold; font-size:14px');
 
 // ── KEYBOARD SHORTCUTS ──────────────────────────────────────
 window.addEventListener('keydown', (e) => {
@@ -98,7 +126,12 @@ window.fetch = async function(...args) {
                         activeConversationId = m[1];
                         const reg = getRegistry();
                         const existingValues = Object.values(reg);
-                        if (!existingValues.includes(activeConversationId)) {
+                        
+                        // 🛡️ IGNORE DEVELOPER CHAT: Don't register the conversation we are currently using for orchestration
+                        const developerConvId = window.__agCaptured?.bodyTemplate?.conversationId;
+                        if (activeConversationId === developerConvId) {
+                            // Skip discovery for self
+                        } else if (!existingValues.includes(activeConversationId)) {
                             // 🆕 Discovery Logic: Prioritize Relink Mode
                             let targetIdx = window.__relinkMode;
                             if (targetIdx) {
@@ -286,10 +319,14 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
     // PROACTIVE WAKEUP
     await window.activateStream(conversationId).catch(e => log(`⚠️ Stream wakeup failed: ${e.message}`, 'warn'));
 
+    // DELAY & PURGE: Wait 1.5s for history replay burst to arrive before purging
+    log(`⏳ Absorbing history replay...`, 'debug');
+    await new Promise(r => setTimeout(r, 1500));
+
     log(`🧹 Purging old chunks for cascade ${cascadeId.slice(0,8)}...`);
     window.__agReadLog = window.__agReadLog.filter(x => !x.payload?.includes(cascadeId));
 
-    log(`🚀 DISPATCH (Agent ${chatIdx}): "${prompt.slice(0,40)}..."`, 'info');
+    log(`🚀 DISPATCH [ID: ${cascadeId.slice(0,8)}] (Agent ${chatIdx}): "${prompt.slice(0,40)}..."`, 'info');
     const payload = { ...c.bodyTemplate, cascadeId, items: [{ text: prompt }], sentAt: new Date().toISOString() };
     
     const res = await _origFetch(c.url, {
@@ -300,18 +337,38 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
 
     if (!res.ok) throw new Error(`POST Failed: ${res.status}`);
 
+    // DETERMINISTIC TRAJECTORY FILTERING: Extract the unique ID for this specific turn
+    let activeTrajectoryId = null;
+    try {
+        const clonedRes = res.clone();
+        const json = await clonedRes.json();
+        activeTrajectoryId = json.update?.trajectoryId;
+        if (activeTrajectoryId) {
+            log(`🎯 SESSION KEY: ${activeTrajectoryId.slice(0,8)} (Trajectory Filter Active)`, 'debug');
+        }
+    } catch(e) {
+        log(`⚠️ Failed to parse trajectoryId: ${e.message}`, 'warn');
+    }
+
     const sentAt = Date.now();
     log(`📬 POST OK. Watching (sentAt=${sentAt}, patience=${window.__agTimeout}ms)...`, 'info');
 
     let lastRunningTs = 0, lastIdleTs = 0, lastChunkTs = 0;
     let isFastExit = false;
-    const globalTimeoutMs = window.__agCliTimeout || 600000; // Match CLI or 10m fallback
+    const globalTimeoutMs = window.__agCliTimeout || 600000;
     const SILENCE_MS = window.__agTimeout;
 
     return new Promise((resolve, reject) => {
         const iv = setInterval(() => {
             const now = Date.now();
-            const allRelevant = window.__agReadLog.filter(x => x.ts >= sentAt && x.payload?.includes(cascadeId));
+            
+            // 🛡️ TRAJECTORY FILTER: Deterministically ignore all history/replay/other chunks
+            const allRelevant = window.__agReadLog.filter(x => {
+                if (x.ts < sentAt) return false;
+                if (!x.payload?.includes(cascadeId)) return false;
+                if (activeTrajectoryId && !x.payload?.includes(activeTrajectoryId)) return false;
+                return true;
+            });
             
             // 🛡️ REPLAY PROTECTION: If we have proactive data, ignore passive (which may be history replay)
             const proactive = allRelevant.filter(x => x.source === 'proactive');
@@ -377,32 +434,63 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
     });
 };
 
-// ── COMMAND DISPATCHER ──────────────────────────────────────
+// ── COMMAND DISPATCHER (Parallel Scanner) ──────────────────
 (function startCommandDispatcher() {
     log('📡 Dispatcher standing by.', 'info');
     setInterval(() => {
-        const raw = localStorage.getItem('__cmd');
-        if (!raw || window.__cmdActive) return;
-        localStorage.removeItem('__cmd');
-        window.__cmdActive = true;
-        const cmd = JSON.parse(raw);
-        const { chatIndex, text, reqId, opts } = cmd;
-        const cascadeId = window.__chatRegistry[chatIndex];
-        if (!cascadeId) {
-            localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer: `ERROR: No chat ${chatIndex}` }));
-            window.__cmdActive = false;
+        // Scan for all pending unique command mailboxes
+        const keys = Object.keys(localStorage).filter(k => k.startsWith('__ag_cmd_'));
+        if (keys.length === 0) {
+            const legacy = localStorage.getItem('__cmd');
+            if (legacy) {
+                localStorage.removeItem('__cmd');
+                processCommand(legacy);
+            }
             return;
         }
-        window.postAndReadAuto(text, cascadeId, opts?.all || false)
-            .then(answer => {
-                localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer }));
-                window.__cmdActive = false;
-            })
-            .catch(err => {
-                localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer: `ERROR: ${err.message}` }));
-                window.__cmdActive = false;
-            });
-    }, 300);
+
+        keys.forEach(targetKey => {
+            const raw = localStorage.getItem(targetKey);
+            if (!raw) return;
+
+            try {
+                const cmd = JSON.parse(raw);
+                const cascadeId = window.__chatRegistry[cmd.chatIndex];
+                
+                // PARALLEL GUARD: Only pick up if the target agent isn't already busy
+                if (cascadeId && !window.__busyAgents[cascadeId]) {
+                    localStorage.removeItem(targetKey); // Acknowledge
+                    processCommand(raw);
+                }
+            } catch (e) {
+                localStorage.removeItem(targetKey);
+            }
+        });
+    }, 400);
+
+    function processCommand(raw) {
+        try {
+            const cmd = JSON.parse(raw);
+            const { chatIndex, text, reqId, opts } = cmd;
+            const cascadeId = window.__chatRegistry[chatIndex];
+            
+            if (window.__agVerbose) log(`📩 Received command [${reqId}] for Agent ${chatIndex}`, 'debug');
+
+            if (!cascadeId) {
+                localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer: `ERROR: No chat ${chatIndex}` }));
+                return;
+            }
+            window.postAndReadAuto(text, cascadeId, opts?.all || false)
+                .then(answer => {
+                    localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer }));
+                })
+                .catch(err => {
+                    localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer: `ERROR: ${err.message}` }));
+                });
+        } catch (e) {
+            log(`❌ Dispatch Error: ${e.message}`, 'error');
+        }
+    }
 })();
 
 // ── DIAGNOSTIC TOOL ─────────────────────────────────────────

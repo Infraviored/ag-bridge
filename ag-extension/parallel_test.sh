@@ -1,42 +1,46 @@
 #!/bin/bash
-# Antigravity Parallel Test v2 (with Watchdog)
+# Antigravity Parallel Test v3 (Configurable IDs)
 
-PROMPT="in bash: make script to Write out your name, sleep 30 seconds, and then in clear chat say that you are done. Do not perform any other actions."
-TIMEOUT=60
+ID_A=5
+ID_B=6
+SLEEP_TIME=10
+TIMEOUT=30
 
-echo "🚀 Starting parallel test at $(date +%T)..."
+PROMPT="in bash: Write out your name, sleep ${SLEEP_TIME} seconds, and then say you are done."
+
+echo "🚀 Starting parallel test (Agents $ID_A & $ID_B) at $(date +%T)..."
 START_TIME=$(date +%s)
 
-# Dispatch Agent 1
-agbridge 1 "$PROMPT" > /tmp/ag_out_1.txt 2>&1 &
-PID1=$!
-echo "📡 Agent 1 (Frontus) dispatched. [PID: $PID1]"
+# Dispatch Agent A
+agbridge $ID_A "$PROMPT" > /tmp/ag_out_$ID_A.txt 2>&1 &
+PID_A=$!
+echo "📡 Agent $ID_A dispatched. [PID: $PID_A]"
 
-# Dispatch Agent 3
-agbridge 3 "$PROMPT" > /tmp/ag_out_3.txt 2>&1 &
-PID3=$!
-echo "📡 Agent 3 (Fiscus) dispatched. [PID: $PID3]"
+# Dispatch Agent B
+agbridge $ID_B "$PROMPT" > /tmp/ag_out_$ID_B.txt 2>&1 &
+PID_B=$!
+echo "📡 Agent $ID_B dispatched. [PID: $PID_B]"
 
 echo "⏳ Waiting for agents (Max ${TIMEOUT}s)..."
 
 for ((i=1; i<=TIMEOUT; i++)); do
-    ps -p $PID1 > /dev/null
-    S1=$?
-    ps -p $PID3 > /dev/null
-    S3=$?
+    ps -p $PID_A > /dev/null
+    S_A=$?
+    ps -p $PID_B > /dev/null
+    S_B=$?
 
-    if [ $S1 -ne 0 ] && [ $S3 -ne 0 ]; then
+    if [ $S_A -ne 0 ] && [ $S_B -ne 0 ]; then
         echo "✅ Both agents finished!"
         break
     fi
 
-    if [ $((i % 10)) -eq 0 ]; then
-        echo "⏱️  ${i}s elapsed... [Agent 1: $([ $S1 -eq 0 ] && echo "RUNNING" || echo "DONE")] [Agent 3: $([ $S3 -eq 0 ] && echo "RUNNING" || echo "DONE")]"
+    if [ $((i % 5)) -eq 0 ]; then
+        echo "⏱️  ${i}s elapsed... [Agent $ID_A: $([ $S_A -eq 0 ] && echo "RUNNING" || echo "DONE")] [Agent $ID_B: $([ $S_B -eq 0 ] && echo "RUNNING" || echo "DONE")]"
     fi
 
     if [ $i -eq $TIMEOUT ]; then
         echo "❌ TIMEOUT REACHED! Killing processes..."
-        kill -9 $PID1 $PID3 2>/dev/null
+        kill -9 $PID_A $PID_B 2>/dev/null
     fi
     sleep 1
 done
@@ -44,5 +48,5 @@ done
 END_TIME=$(date +%s)
 echo "--------------------------------"
 echo "⏱️ Total Time: $((END_TIME - START_TIME))s"
-echo "📄 Agent 1 (Last 2 lines): $(tail -n 2 /tmp/ag_out_1.txt)"
-echo "📄 Agent 3 (Last 2 lines): $(tail -n 2 /tmp/ag_out_3.txt)"
+echo "📄 Agent $ID_A: $(tail -n 1 /tmp/ag_out_$ID_A.txt)"
+echo "📄 Agent $ID_B: $(tail -n 1 /tmp/ag_out_$ID_B.txt)"

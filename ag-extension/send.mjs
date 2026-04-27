@@ -73,9 +73,12 @@ ws.on('open', () => {
     const opts = { all: allFlag };
     const cmd = JSON.stringify({ chatIndex, text, reqId, opts });
     
+    // Use unique mailbox to prevent parallel collisions
+    const mailboxKey = `__ag_cmd_${reqId}`;
+    
     ws.send(JSON.stringify({
       id: 1, method: 'Runtime.evaluate',
-      params: { expression: `localStorage.setItem('__cmd', ${JSON.stringify(cmd)})` }
+      params: { expression: `localStorage.setItem('${mailboxKey}', ${JSON.stringify(cmd)})` }
     }));
 
     const iv = setInterval(() => ws.send(JSON.stringify({

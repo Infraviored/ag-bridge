@@ -517,6 +517,14 @@
                 }
 
                 const list = document.getElementById('chat-list');
+                const bridgeStatus = document.getElementById('bridge-status');
+                
+                // Update Bridge Status UI
+                if (bridgeStatus) {
+                    bridgeStatus.innerText = data.connected ? 'Online' : 'Offline';
+                    bridgeStatus.style.color = data.connected ? '#4ec9b0' : '#f44747';
+                }
+
                 list.innerHTML = '';
                 
                 // Unified source: browserState now contains registry, names, duties

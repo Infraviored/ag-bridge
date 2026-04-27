@@ -397,6 +397,11 @@ async function updateDashboard() {
                         pendingDeletes.delete(k);
                     }
                 }
+                // SELF-HEALING STATUS: If we successfully got state back, the bridge is alive.
+                if (!bridgeActive && (Object.keys(browserState.registry).length > 0 || browserState.captured)) {
+                    bridgeActive = true;
+                    updateStatusBar(BridgeState.Active);
+                }
                 dashboardPanel?.webview.postMessage({
                     type: 'status',
                     data: {
