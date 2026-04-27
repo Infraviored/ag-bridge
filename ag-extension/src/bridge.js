@@ -1,5 +1,5 @@
 // 🚀 ANTIGRAVITY BRIDGE ORCHESTRATOR
-const VERSION = '1.0.0';
+const VERSION = '1.1.2';
 
 const _origFetch = window.fetch;
 window.__origFetch = _origFetch;
@@ -32,15 +32,12 @@ window.__chatNames = JSON.parse(localStorage.getItem('__ag_names') || '{}');
 function sanitizeBusyState() {
     const busy = getBusyState();
     const now = Date.now();
-    let changed = false;
     for (const id in busy) {
-        // If an entry has no timestamp or is > 30 mins old, it's likely a ghost from a previous crash
         if (!busy[id].startTime || (now - busy[id].startTime > 30 * 60 * 1000)) {
             delete busy[id];
-            changed = true;
         }
     }
-    if (changed) setBusyState(busy);
+    setBusyState(busy); // Always set it so window.__busyAgents is initialized
 }
 sanitizeBusyState();
 
@@ -56,6 +53,7 @@ window.__activeStreamCount = 0;
 window.__cmdActive = false;
 window.__lastOutputs = window.__lastOutputs || {};
 window.__lastPrompts = window.__lastPrompts || {};
+window.__activeTrajectories = window.__activeTrajectories || {};
 window.__agLogHeartbeat = localStorage.getItem('__ag_log_heartbeat') === 'true';
 window.__agCliTimeout = parseInt(localStorage.getItem('__ag_cli_timeout') || '600000');
 window.__agTimeout = parseInt(localStorage.getItem('__ag_timeout') || '180000');
@@ -360,6 +358,7 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
         const json = await clonedRes.json();
         activeTrajectoryId = json.update?.trajectoryId;
         if (activeTrajectoryId) {
+            window.__activeTrajectories[conversationId] = activeTrajectoryId;
             log(`🎯 SESSION KEY: ${activeTrajectoryId.slice(0,8)} (Trajectory Filter Active)`, 'debug');
         }
     } catch(e) {
@@ -479,6 +478,13 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
                     processCommand(raw);
                 }
             } catch (e) {
+                log(`❌ Dispatcher crashed while reading command: ${e.message}`, 'error');
+                try {
+                    const reqIdMatch = raw.match(/"reqId"\s*:\s*"([^"]+)"/);
+                    if (reqIdMatch) {
+                        localStorage.setItem(`__res_${reqIdMatch[1]}`, JSON.stringify({ answer: `BRIDGE CRASH: ${e.message}` }));
+                    }
+                } catch(e2) {}
                 localStorage.removeItem(targetKey);
             }
         });

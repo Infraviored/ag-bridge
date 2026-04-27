@@ -64,16 +64,21 @@ ws.on('open', () => {
       params: { expression: `JSON.stringify({ 
         busy: JSON.parse(localStorage.getItem('__ag_busy') || '{}'),
         registry: JSON.parse(localStorage.getItem('__ag_registry') || '{}'),
-        windowId: window.__agId
+        windowId: window.__agId,
+        activeTrajectories: window.__activeTrajectories || {},
+        pendingCmds: Object.keys(localStorage).filter(k => k.startsWith('__ag_cmd_')).length,
+        version: typeof VERSION !== 'undefined' ? VERSION : 'unknown'
       })` }
     }));
     ws.on('message', data => {
       const msg = JSON.parse(data);
       if (msg.id === 10) {
         const state = JSON.parse(msg.result?.result?.value || '{}');
-        console.log(`\x1b[33m--- BRIDGE INSPECTOR (Window: ${state.windowId}) ---\x1b[0m`);
-        console.log(`\x1b[36mRegistry:\x1b[0m`, JSON.stringify(state.registry, null, 2));
+        console.log(`\x1b[33m--- BRIDGE INSPECTOR (Window: ${state.windowId} | v${state.version}) ---\x1b[0m`);
+        console.log(`\x1b[36mRegistry Size:\x1b[0m`, Object.keys(state.registry).length);
         console.log(`\x1b[35mBusy Agents:\x1b[0m`, JSON.stringify(state.busy, null, 2));
+        console.log(`\x1b[32mActive Trajectories:\x1b[0m`, JSON.stringify(state.activeTrajectories, null, 2));
+        console.log(`\x1b[31mPending Mailbox Commands:\x1b[0m`, state.pendingCmds);
         ws.close();
         process.exit(0);
       }
