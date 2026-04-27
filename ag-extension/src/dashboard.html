@@ -8,26 +8,32 @@
             font-family: 'Segoe UI', sans-serif;
             background: #1e1e1e;
             color: #d4d4d4;
-            padding: 20px;
+            padding: 10px;
             line-height: 1.5;
+            overflow-x: hidden;
         }
 
         .container {
             position: relative;
             background: rgba(45, 45, 45, 0.8);
             border-radius: 12px;
-            padding: 20px;
+            padding: 15px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
             border: 1px solid rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
+            overflow-x: hidden;
         }
 
         h2 {
             color: #569cd6;
-            margin: 0 0 20px 0;
+            margin: 0 0 15px 0;
             display: flex;
             align-items: center;
             gap: 10px;
+            font-size: 1.4em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         h3 {
@@ -396,8 +402,7 @@
 
 <body>
     <div class="container">
-        <button class="refresh-btn" onclick="refresh()">↻ Refresh</button>
-        <h2><img src="${iconUri}" width="28" style="vertical-align: middle;"> Antigravity Command Center</h2>
+        <h2><img src="${iconUri}" width="28" style="vertical-align: middle;"> AG Bridge</h2>
         <div class="status-row"><span>Status:</span><span id="bridge-status">Offline</span></div>
         <div class="status-row"><span>Gateway:</span><span id="token-status">-</span></div>
         <h3>Registry <button class="danger" onclick="resetAll()">Wipe</button></h3>

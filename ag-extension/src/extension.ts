@@ -7,7 +7,6 @@ import * as os from 'os';
 import { execSync } from 'child_process';
 
 let statusBarItem: vscode.StatusBarItem;
-let dashboardPanel: vscode.WebviewPanel | undefined;
 let outputChannel: vscode.OutputChannel;
 let bridgeActive = false;
 let relinkInProgress: string | null = null;
@@ -264,162 +263,177 @@ function updateStatusBar(state: BridgeState) {
 }
 
 async function showDashboard() {
-    if (dashboardPanel) {
-        dashboardPanel.reveal(vscode.ViewColumn.Beside);
-        return;
-    }
-    dashboardPanel = vscode.window.createWebviewPanel('agDashboard', 'Antigravity Bridge Status', vscode.ViewColumn.Beside, {
-        enableScripts: true,
-        localResourceRoots: [vscode.Uri.file(globalExtensionPath)]
-    });
-    dashboardPanel.onDidDispose(() => dashboardPanel = undefined);
+    await vscode.commands.executeCommand('workbench.view.extension.antigravity-bridge');
+}
 
-    dashboardPanel.webview.onDidReceiveMessage(async message => {
-        switch (message.command) {
-            case 'changeIndex':
-                        const newIdx = await vscode.window.showInputBox({ prompt: `New Index for Agent ${message.idx}`, value: message.idx });
-                        if (newIdx && newIdx !== message.idx) {
-                            const config = loadConfig();
-                            if (config.agents[newIdx]) {
-                                vscode.window.showErrorMessage(`Index ${newIdx} is already in use!`);
-                                return;
-                            }
-                            config.agents[newIdx] = config.agents[message.idx];
-                            delete config.agents[message.idx];
-                            
-                            saveConfig(config);
-                            
-                            // Push to browser
-                            const tab = await getAntigravityTab();
-                            if (tab) {
-                                const ws = new WebSocket(tab.webSocketDebuggerUrl);
-                                ws.on('open', () => {
-                                    ws.send(JSON.stringify({ id: 107, method: 'Runtime.evaluate', params: { expression: `
-                                        window.__chatRegistry[${newIdx}] = window.__chatRegistry[${message.idx}];
-                                        window.__chatNames[${newIdx}] = window.__chatNames[${message.idx}];
-                                        delete window.__chatRegistry[${message.idx}];
-                                        delete window.__chatNames[${message.idx}];
-                                        if(window.__relinkMode == ${message.idx}) window.__relinkMode = ${newIdx};
-                                    ` } }));
-                                    ws.on('message', () => ws.close());
-                                });
-                            }
+class DashboardViewProvider implements vscode.WebviewViewProvider {
+    public static readonly viewType = 'agBridgeDashboard';
+    private _view?: vscode.WebviewView;
+
+    constructor(private readonly _extensionPath: string) { }
+
+    public resolveWebviewView(
+        webviewView: vscode.WebviewView,
+        context: vscode.WebviewViewResolveContext,
+        _token: vscode.CancellationToken,
+    ) {
+        this._view = webviewView;
+
+        webviewView.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [vscode.Uri.file(this._extensionPath)]
+        };
+
+        webviewView.webview.html = getDashboardHtml(webviewView.webview, this._extensionPath);
+
+        webviewView.webview.onDidReceiveMessage(async message => {
+            switch (message.command) {
+                case 'changeIndex':
+                    const newIdx = await vscode.window.showInputBox({ prompt: `New Index for Agent ${message.idx}`, value: message.idx });
+                    if (newIdx && newIdx !== message.idx) {
+                        const config = loadConfig();
+                        if (config.agents[newIdx]) {
+                            vscode.window.showErrorMessage(`Index ${newIdx} is already in use!`);
+                            return;
                         }
-                        break;
-                    case 'rename': await renameChat(message.idx); break;
-            case 'defineDuty': await defineDuty(message.idx); break;
-            case 'resetAll': await resetAll(); break;
-            case 'relink': await relink(message.idx); break;
-            case 'cancelRelink': await cancelRelink(message.idx); break;
-            case 'deleteAgent': await deleteAgent(message.idx); break;
-            case 'refresh': updateDashboard(); break;
-        }
-        updateDashboard();
-    });
-
-    dashboardPanel.webview.html = getDashboardHtml(dashboardPanel.webview, globalExtensionPath);
-    updateDashboard();
-}
-
-async function updateDashboard() {
-    if (!dashboardPanel) return;
-    try {
-        const tab = await getAntigravityTab();
-        if (!tab) {
-            dashboardPanel.webview.postMessage({ type: 'status', data: { connected: false } });
-            return;
-        }
-        const ws = new WebSocket(tab.webSocketDebuggerUrl);
-        ws.on('open', () => {
-            const config = loadConfig();
-            const registry: Record<string, string> = {};
-            const names: Record<string, string> = {};
-            const duties: Record<string, string> = {};
-            Object.entries(config.agents).forEach(([idx, a]) => {
-                registry[idx] = a.id;
-                names[idx] = a.name;
-                duties[idx] = a.duty;
-            });
-
-            const syncScript = `(function(){
-                window.__chatRegistry = window.__chatRegistry || {};
-                window.__chatNames = window.__chatNames || {};
-                window.__chatDuties = window.__chatDuties || {};
-                
-                const fileReg = ${JSON.stringify(registry)};
-                const fileNames = ${JSON.stringify(names)};
-                const fileDuties = ${JSON.stringify(duties)};
-                
-                Object.assign(window.__chatRegistry, fileReg);
-                Object.assign(window.__chatNames, fileNames);
-                Object.assign(window.__chatDuties, fileDuties);
-                
-                localStorage.setItem('__ag_registry', JSON.stringify(window.__chatRegistry));
-            })()`;
-            ws.send(JSON.stringify({ id: 99, method: 'Runtime.evaluate', params: { expression: syncScript } }));
-
-            const evalStr = `JSON.stringify({ 
-                registry: window.__chatRegistry, 
-                names: window.__chatNames, 
-                duties: window.__chatDuties,
-                lastOutputs: window.__lastOutputs, 
-                lastPrompts: window.__lastPrompts, 
-                busyAgents: JSON.parse(localStorage.getItem('__ag_busy') || '{}'), 
-                captured: !!window.__agCaptured?.last, 
-                relinkMode: window.__relinkMode, 
-                settings: { cliTimeout: window.__agCliTimeout / 1000, timeout: window.__agTimeout / 1000, logHeartbeat: window.__agLogHeartbeat },
-                logs: (window.__agLogs || []).slice(${lastLogIndex}) 
-            })`;
-            ws.send(JSON.stringify({ id: 2, method: 'Runtime.evaluate', params: { expression: evalStr } }));
-        });
-        ws.on('message', (data: WebSocket.Data) => {
-            const msg = JSON.parse(data.toString());
-            if (msg.id === 2) {
-                const browserState = JSON.parse(msg.result?.result?.value || '{}');
-                const config = loadConfig();
-
-                // Sync browser state BACK to central config if needed (e.g. relink happened in browser)
-                let changed = false;
-                Object.entries(browserState.registry).forEach(([idx, id]) => {
-                    const idStr = id as string;
-                    if (!config.agents[idx]) {
-                        config.agents[idx] = { id: idStr, name: `Agent ${idx}`, duty: 'General Intelligence' };
-                        changed = true;
-                    } else if (config.agents[idx].id !== idStr) {
-                        config.agents[idx].id = idStr;
-                        changed = true;
+                        config.agents[newIdx] = config.agents[message.idx];
+                        delete config.agents[message.idx];
+                        saveConfig(config);
+                        
+                        const tab = await getAntigravityTab();
+                        if (tab) {
+                            const ws = new WebSocket(tab.webSocketDebuggerUrl);
+                            ws.on('open', () => {
+                                ws.send(JSON.stringify({ id: 107, method: 'Runtime.evaluate', params: { expression: `
+                                    window.__chatRegistry[${newIdx}] = window.__chatRegistry[${message.idx}];
+                                    window.__chatNames[${newIdx}] = window.__chatNames[${message.idx}];
+                                    delete window.__chatRegistry[${message.idx}];
+                                    delete window.__chatNames[${message.idx}];
+                                    if(window.__relinkMode == ${message.idx}) window.__relinkMode = ${newIdx};
+                                ` } }));
+                                ws.on('message', () => ws.close());
+                            });
+                        }
                     }
-                });
-                if (changed) saveConfig(config);
-
-                // Clean up pending deletes once browser confirms they are gone
-                for (const k of Array.from(pendingDeletes)) {
-                    if (!(k in browserState.registry)) {
-                        pendingDeletes.delete(k);
+                    break;
+                case 'rename': await renameChat(message.idx); break;
+                case 'defineDuty': await defineDuty(message.idx); break;
+                case 'resetAll': await resetAll(); break;
+                case 'relink': await relink(message.idx); break;
+                case 'cancelRelink': await cancelRelink(message.idx); break;
+                case 'deleteAgent': await deleteAgent(message.idx); break;
+                case 'refresh': this.update(); break;
+                case 'saveSettings':
+                    const config = loadConfig();
+                    config.settings.cliTimeout = message.settings.cliTimeout;
+                    config.settings.timeout = message.settings.timeout;
+                    config.settings.logHeartbeat = message.settings.logHeartbeat;
+                    saveConfig(config);
+                    
+                    const tab = await getAntigravityTab();
+                    if (tab) {
+                        const ws2 = new WebSocket(tab.webSocketDebuggerUrl);
+                        ws2.on('open', () => {
+                            ws2.send(JSON.stringify({ 
+                                id: 106, 
+                                method: 'Runtime.evaluate', 
+                                params: { 
+                                    expression: `localStorage.setItem('__ag_cli_timeout', '${config.settings.cliTimeout * 1000}'); localStorage.setItem('__ag_timeout', '${config.settings.timeout * 1000}'); localStorage.setItem('__ag_log_heartbeat', '${config.settings.logHeartbeat}'); window.__agLogHeartbeat = ${config.settings.logHeartbeat}; window.__agCliTimeout = ${config.settings.cliTimeout * 1000}; window.__agTimeout = ${config.settings.timeout * 1000};` 
+                                } 
+                            }));
+                            ws2.on('message', () => ws2.close());
+                        });
                     }
-                }
-
-                // SELF-HEALING STATUS: If we successfully got state back, the bridge is alive.
-                if (!bridgeActive && (Object.keys(browserState.registry).length > 0 || browserState.captured)) {
-                    bridgeActive = true;
-                    updateStatusBar(BridgeState.Active);
-                }
-
-                dashboardPanel?.webview.postMessage({ 
-                    type: 'status', 
-                    data: { 
-                        ...browserState, 
-                        connected: bridgeActive, 
-                        tokenCaptured: browserState.captured 
-                    } 
-                });
-                ws.close();
+                    break;
             }
+            this.update();
         });
-    } catch (e) {
-        dashboardPanel.webview.postMessage({ type: 'status', data: { connected: false } });
+    }
+
+    public async update() {
+        if (!this._view) return;
+        try {
+            const tab = await getAntigravityTab();
+            if (!tab) {
+                this._view.webview.postMessage({ type: 'status', data: { connected: false } });
+                return;
+            }
+            const ws = new WebSocket(tab.webSocketDebuggerUrl);
+            ws.on('open', () => {
+                const config = loadConfig();
+                const registry: Record<string, string> = {};
+                const names: Record<string, string> = {};
+                const duties: Record<string, string> = {};
+                Object.entries(config.agents).forEach(([idx, a]) => {
+                    registry[idx] = a.id;
+                    names[idx] = a.name;
+                    duties[idx] = a.duty;
+                });
+
+                const syncScript = `(function(){
+                    window.__chatRegistry = window.__chatRegistry || {};
+                    window.__chatNames = window.__chatNames || {};
+                    window.__chatDuties = window.__chatDuties || {};
+                    const fileReg = ${JSON.stringify(registry)};
+                    const fileNames = ${JSON.stringify(names)};
+                    const fileDuties = ${JSON.stringify(duties)};
+                    Object.assign(window.__chatRegistry, fileReg);
+                    Object.assign(window.__chatNames, fileNames);
+                    Object.assign(window.__chatDuties, fileDuties);
+                    localStorage.setItem('__ag_registry', JSON.stringify(window.__chatRegistry));
+                })()`;
+                ws.send(JSON.stringify({ id: 99, method: 'Runtime.evaluate', params: { expression: syncScript } }));
+
+                const evalStr = `JSON.stringify({ 
+                    registry: window.__chatRegistry, 
+                    names: window.__chatNames, 
+                    duties: window.__chatDuties,
+                    lastOutputs: window.__lastOutputs, 
+                    lastPrompts: window.__lastPrompts, 
+                    busyAgents: JSON.parse(localStorage.getItem('__ag_busy') || '{}'), 
+                    captured: !!window.__agCaptured?.last, 
+                    relinkMode: window.__relinkMode, 
+                    settings: { cliTimeout: window.__agCliTimeout / 1000, timeout: window.__agTimeout / 1000, logHeartbeat: window.__agLogHeartbeat }
+                })`;
+                ws.send(JSON.stringify({ id: 2, method: 'Runtime.evaluate', params: { expression: evalStr } }));
+            });
+            ws.on('message', (data: WebSocket.Data) => {
+                const msg = JSON.parse(data.toString());
+                if (msg.id === 2) {
+                    const browserState = JSON.parse(msg.result?.result?.value || '{}');
+                    const config = loadConfig();
+                    let changed = false;
+                    Object.entries(browserState.registry).forEach(([idx, id]) => {
+                        const idStr = id as string;
+                        if (!config.agents[idx]) {
+                            config.agents[idx] = { id: idStr, name: `Agent ${idx}`, duty: 'General Intelligence' };
+                            changed = true;
+                        } else if (config.agents[idx].id !== idStr) {
+                            config.agents[idx].id = idStr;
+                            changed = true;
+                        }
+                    });
+                    if (changed) saveConfig(config);
+                    
+                    if (!bridgeActive && (Object.keys(browserState.registry).length > 0 || browserState.captured)) {
+                        bridgeActive = true;
+                        updateStatusBar(BridgeState.Active);
+                    }
+
+                    this._view?.webview.postMessage({ 
+                        type: 'status', 
+                        data: { ...browserState, connected: bridgeActive, tokenCaptured: browserState.captured } 
+                    });
+                    ws.close();
+                }
+            });
+        } catch (e) {
+            this._view.webview.postMessage({ type: 'status', data: { connected: false } });
+        }
     }
 }
+
+let dashboardProvider: DashboardViewProvider;
 
 async function renameChat(idx: string) {
     const config = loadConfig();
@@ -531,6 +545,10 @@ export function activate(context: vscode.ExtensionContext) {
     setupGlobalCommand(context.extensionPath);
     outputChannel = vscode.window.createOutputChannel("Antigravity Bridge");
     context.subscriptions.push(outputChannel);
+
+    dashboardProvider = new DashboardViewProvider(context.extensionPath);
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(DashboardViewProvider.viewType, dashboardProvider));
+
     context.subscriptions.push(vscode.commands.registerCommand('agbridge.inject', () => injectBridge()));
     context.subscriptions.push(vscode.commands.registerCommand('agbridge.showDashboard', () => showDashboard()));
 
@@ -572,8 +590,8 @@ export function activate(context: vscode.ExtensionContext) {
                     ws.close();
                 });
 
-                if (dashboardPanel) {
-                    await updateDashboard();
+                if (dashboardProvider) {
+                    await dashboardProvider.update();
                 }
             }
         } catch (e) {
