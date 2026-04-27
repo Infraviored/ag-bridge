@@ -565,80 +565,16 @@ function activate(context) {
                     }));
                 });
                 ws.on('message', (data) => {
-                    const msg = JSON.parse(data.toString());
-                    if (msg.command === 'changeIndex') {
-                        const config = loadConfig();
-                        const oldIdx = msg.idx;
-                        vscode.window.showInputBox({ prompt: `New index for ${config.agents[oldIdx]?.name || 'Agent'}`, value: oldIdx }).then(newIdx => {
-                            if (newIdx && newIdx !== oldIdx) {
-                                config.agents[newIdx] = config.agents[oldIdx];
-                                delete config.agents[oldIdx];
-                                saveConfig(config);
-                                updateDashboard();
-                            }
-                        });
-                    }
-                    if (msg.command === 'rename') {
-                        const config = loadConfig();
-                        vscode.window.showInputBox({ prompt: 'Agent Name', value: config.agents[msg.idx]?.name }).then(name => {
-                            if (name) {
-                                if (!config.agents[msg.idx])
-                                    config.agents[msg.idx] = { id: '', name: '', duty: '' };
-                                config.agents[msg.idx].name = name;
-                                saveConfig(config);
-                                updateDashboard();
-                            }
-                        });
-                    }
-                    if (msg.command === 'defineDuty') {
-                        const config = loadConfig();
-                        vscode.window.showInputBox({ prompt: 'Agent Duty', value: config.agents[msg.idx]?.duty }).then(duty => {
-                            if (duty) {
-                                if (!config.agents[msg.idx])
-                                    config.agents[msg.idx] = { id: '', name: '', duty: '' };
-                                config.agents[msg.idx].duty = duty;
-                                saveConfig(config);
-                                updateDashboard();
-                            }
-                        });
-                    }
-                    if (msg.command === 'saveSettings') {
-                        const config = loadConfig();
-                        config.settings.cliTimeout = msg.settings.cliTimeout;
-                        config.settings.timeout = msg.settings.timeout;
-                        config.settings.logHeartbeat = msg.settings.logHeartbeat;
-                        saveConfig(config);
-                        // Push to browser immediately
-                        if (tab) {
-                            const ws2 = new ws_1.default(tab.webSocketDebuggerUrl);
-                            ws2.on('open', () => {
-                                ws2.send(JSON.stringify({
-                                    id: 106,
-                                    method: 'Runtime.evaluate',
-                                    params: {
-                                        expression: `localStorage.setItem('__ag_cli_timeout', '${config.settings.cliTimeout * 1000}'); localStorage.setItem('__ag_timeout', '${config.settings.timeout * 1000}'); localStorage.setItem('__ag_log_heartbeat', '${config.settings.logHeartbeat}'); window.__agLogHeartbeat = ${config.settings.logHeartbeat}; window.__agCliTimeout = ${config.settings.cliTimeout * 1000}; window.__agTimeout = ${config.settings.timeout * 1000};`
-                                    }
-                                }));
-                                ws2.on('message', () => ws2.close());
-                            });
+                    try {
+                        const msg = JSON.parse(data.toString());
+                        if (msg.id === 200) {
+                            const captured = msg.result?.result?.value;
+                            updateStatusBar(captured ? BridgeState.Active : BridgeState.PromptOnce);
+                            ws.close();
                         }
                     }
-                    if (msg.command === 'resetAll') {
-                        const config = loadConfig();
-                        config.agents = {};
-                        saveConfig(config);
-                        updateDashboard();
-                    }
-                    if (msg.command === 'deleteAgent') {
-                        const config = loadConfig();
-                        delete config.agents[msg.idx];
-                        saveConfig(config);
-                        updateDashboard();
-                    }
-                    if (msg.id === 200) {
-                        const captured = msg.result?.result?.value;
-                        updateStatusBar(captured ? BridgeState.Active : BridgeState.PromptOnce);
-                        ws.close();
+                    catch (e) {
+                        // Binary or malformed message
                     }
                 });
                 ws.on('error', () => {

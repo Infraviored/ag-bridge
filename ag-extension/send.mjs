@@ -3,23 +3,48 @@ import { randomUUID } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
 import WebSocket from 'ws';
 
+const DELEGATION_PROMPT = `
+# ANTIGRAVITY ORCHESTRATION PROTOCOL
+
+You are the Orchestrator. You have direct control over specialized sub-agents via the 'agbridge' CLI. Use them to delegate complex, parallel, or domain-specific tasks.
+
+CONTROL INTERFACE:
+- Dispatch:    agbridge <idx> "prompt" (Persistent, context-aware sessions)
+- Supervision: Add --all to capture the complete execution trajectory.
+- Inspection:  agbridge --inspect to monitor global health and trajectory mapping.
+
+TRUE PARALLELISM:
+You can dispatch multiple agents simultaneously by using 'run_in_background: true' in your shell tool calls. The Bridge tracks each agent independently; you will be notified as each completes.
+
+SESSION CONSTRAINTS:
+- Hard Timeout: {{cliMin}} minutes (The absolute maximum duration for a single command).
+- Activity Guard: {{silenceMin}} minutes (Monitors for silence or stuck tool calls).
+- Note: Agents can perform long-running tasks as long as they provide periodic progress updates.
+
+GUIDELINES:
+1. Delegation:  Assign tasks based on the specific agent roles defined in the Registry.
+2. Persistence:  Sessions are long-lived; you don't need to re-explain shared context.
+3. Efficiency:   Use parallel dispatch for multi-agent workflows (e.g., Frontus + Backus).
+`;
+
 const arg1 = process.argv[2];
 const isInspectMode = process.argv.includes('--inspect');
 const isLastMode = process.argv.includes('--last');
 const allFlag = process.argv.includes('--all');
-let text = "";
+const isHelp = process.argv.includes('--help') || process.argv.includes('-h');
 
-if (!arg1 && !isInspectMode) {
-  console.error('Usage: agbridge <index|name> "Message" [--all]');
-  console.error('Usage: agbridge <index|name> --last');
-  console.error('Usage: agbridge --inspect');
-  process.exit(1);
+if ((!arg1 && !isInspectMode) || isHelp) {
+  console.log(DELEGATION_PROMPT
+    .replace('{{cliMin}}', '10')
+    .replace('{{silenceMin}}', '3'));
+  process.exit(0);
 }
 
+let text = "";
 if (!isLastMode && !isInspectMode) {
   text = process.argv.slice(3).filter(a => a !== '--all' && a !== '--inspect').join(' ');
   if (!text) {
-    console.error('Error: No prompt provided. Use --last to fetch the last output.');
+    console.error('Error: No prompt provided. Use --last to fetch the last output, or --help for protocol.');
     process.exit(1);
   }
 }
