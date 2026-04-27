@@ -18,9 +18,6 @@ function getBusyState() {
 function setBusyState(busy) {
     localStorage.setItem('__ag_busy', JSON.stringify(busy));
     window.__busyAgents = busy;
-    if (window.__agVerbose) {
-        log(`⚙️ [STATE] Busy status updated: ${JSON.stringify(busy)}`, 'debug');
-    }
 }
 
 window.__agLogs = window.__agLogs || [];
@@ -235,17 +232,6 @@ window.activateStream = async function(conversationId) {
                         }
                     }
 
-                    if (chunk.includes('"CASCADE_RUN_STATUS_RUNNING"')) {
-                        const busy = getBusyState();
-                        busy[conversationId] = true;
-                        setBusyState(busy);
-                    }
-                    if (chunk.includes('"CASCADE_RUN_STATUS_IDLE"')) {
-                        const busy = getBusyState();
-                        busy[conversationId] = false;
-                        setBusyState(busy);
-                    }
-                    
                     // Trace logs for debugging
                     if (window.__agVerbose) {
                         log(`📥 [PROACTIVE] Chunk received (${chunk.length} bytes)`, 'debug');
