@@ -530,12 +530,15 @@ async function deleteAgent(idx: string) {
 function getDashboardHtml(webview: vscode.Webview, extensionPath: string) {
     const iconPath = vscode.Uri.file(path.join(extensionPath, 'assets', 'agbridge-icon.png'));
     const iconUri = webview.asWebviewUri(iconPath);
+    const linkIconPath = vscode.Uri.file(path.join(extensionPath, 'assets', 'link.svg'));
+    const linkIconUri = webview.asWebviewUri(linkIconPath);
 
     const htmlPath = path.join(extensionPath, 'src', 'dashboard.html');
     let html = fs.readFileSync(htmlPath, 'utf8');
     
     // Replace placeholders
     html = html.replace(/\${iconUri}/g, iconUri.toString());
+    html = html.replace(/\${linkIconUri}/g, linkIconUri.toString());
     
     return html;
 }

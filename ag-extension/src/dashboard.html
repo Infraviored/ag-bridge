@@ -320,6 +320,26 @@
             border: none;
         }
 
+        #status-help {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            border: 1px solid currentColor;
+            font-size: 10px;
+            font-weight: bold;
+            vertical-align: middle;
+            transition: all 0.2s;
+        }
+
+        #status-container {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
         button.danger {
             color: #f44747;
             border-color: #f44747;
@@ -343,6 +363,26 @@
             width: 100%;
             margin-top: 20px;
             padding: 10px;
+        }
+
+        #wipe-btn {
+            background: #333;
+            color: #888;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-left: 10px;
+            cursor: pointer;
+            border: 1px solid #444;
+            font-size: 11px;
+            transition: all 0.2s;
+            vertical-align: middle;
+            font-family: monospace;
+        }
+
+        #wipe-btn:hover {
+            background: #444;
+            color: #f44747;
+            border-color: #f44747;
         }
 
         .delete-btn {
@@ -403,9 +443,14 @@
 <body>
     <div class="container">
         <h2><img src="${iconUri}" width="28" style="vertical-align: middle;"> AG Bridge</h2>
-        <div class="status-row"><span>Status:</span><span id="bridge-status">Offline</span></div>
-        <div class="status-row"><span>Gateway:</span><span id="token-status">-</span></div>
-        <h3>Registry <button class="danger" onclick="resetAll()">Wipe</button></h3>
+        <div class="status-row">
+            <span>Status:</span>
+            <span id="status-container">
+                <span id="bridge-status">Offline</span>
+                <span id="status-help" style="display: none;">?</span>
+            </span>
+        </div>
+        <h3>Registry <button id="wipe-btn" onclick="confirmWipe()">Wipe</button></h3>
         <div id="chat-list"></div>
         
         <button class="copy-btn" id="copy-instr-btn" onclick="copyInstructions()">📋 Copy Delegation Prompt</button>
@@ -448,6 +493,11 @@
         function rename(idx) { vscode.postMessage({ command: 'rename', idx }); }
         function defineDuty(idx) { vscode.postMessage({ command: 'defineDuty', idx }); }
         function resetAll() { vscode.postMessage({ command: 'resetAll' }); }
+        function confirmWipe() {
+            if (confirm("Are you sure you want to wipe the registry? This will unlink all agents.")) {
+                resetAll();
+            }
+        }
         function relink(idx) { vscode.postMessage({ command: 'relink', idx }); }
         function cancelRelink(idx) { vscode.postMessage({ command: 'cancelRelink', idx }); }
         function deleteAgent(idx) { vscode.postMessage({ command: 'deleteAgent', idx }); }
@@ -534,8 +584,29 @@ GUIDELINES:
                 const bridgeStatus = document.getElementById('bridge-status');
                 
                 if (bridgeStatus) {
-                    bridgeStatus.innerText = data.connected ? 'Online' : 'Offline';
-                    bridgeStatus.style.color = data.connected ? '#4ec9b0' : '#f44747';
+                    const helpIcon = document.getElementById('status-help');
+                    const statusContainer = document.getElementById('status-container');
+                    
+                    if (!data.connected) {
+                        bridgeStatus.innerText = 'Offline';
+                        bridgeStatus.style.color = '#f44747';
+                        helpIcon.style.display = 'none';
+                        statusContainer.style.cursor = 'default';
+                        statusContainer.title = '';
+                    } else if (!data.tokenCaptured) {
+                        bridgeStatus.innerText = 'Prompt Once';
+                        bridgeStatus.style.color = '#f59e0b';
+                        helpIcon.style.display = 'inline-flex';
+                        helpIcon.style.color = '#f59e0b';
+                        statusContainer.style.cursor = 'help';
+                        statusContainer.title = 'Bridge connected. Please send one manual message in any Antigravity Chat to initialize context capture (required for secure session binding).';
+                    } else {
+                        bridgeStatus.innerText = 'Online';
+                        bridgeStatus.style.color = '#4ec9b0';
+                        helpIcon.style.display = 'none';
+                        statusContainer.style.cursor = 'default';
+                        statusContainer.title = '';
+                    }
                 }
 
                 const allIndices = Object.keys(data.registry || {}).sort((a, b) => parseInt(a) - parseInt(b));
@@ -567,11 +638,12 @@ GUIDELINES:
                     item.className = 'chat-card' + (isRelinking ? ' relinking' : '') + (isBusy ? ' busy' : '');
 
                     const relinkAction = isRelinking ? 'cancelRelink' : 'relink';
+                    const relinkImg = '<img src="${linkIconUri}" width="14" style="vertical-align: middle; opacity: 0.8;">';
                     
                     // Selective innerHTML update for fields
                     item.innerHTML = [
                         '<button class="delete-btn" onclick="deleteAgent(\'' + idx + '\')" title="Delete Agent">×</button>',
-                        '<button class="relink-btn ' + (isRelinking ? 'active' : '') + '" onclick="' + relinkAction + '(\'' + idx + '\')" title="' + (isRelinking ? 'Cancel Relink' : 'Relink to current chat') + '">🔗</button>',
+                        '<button class="relink-btn ' + (isRelinking ? 'active' : '') + '" onclick="' + relinkAction + '(\'' + idx + '\')" title="' + (isRelinking ? 'Cancel Relink' : 'Relink to current chat') + '">' + relinkImg + '</button>',
                         '<div style="display: flex; align-items: center; margin-bottom: 5px;">',
                         '<span class="index-badge ' + (isRelinking ? 'relinking' : '') + '" onclick="changeIndex(\'' + idx + '\')" title="Change Agent Index">Agent ' + idx + '</span>',
                         '<span class="chat-name editable" onclick="rename(\'' + idx + '\')" title="Rename Agent">' + name + '</span>',
