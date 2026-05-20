@@ -15,6 +15,7 @@ let lastLogIndex = 0;
 let isPolling = false;
 let lastHeartbeat = 0;
 let globalExtensionPath: string;
+let bridgeServer: http.Server | null = null;
 
 enum BridgeState {
     MissingRDP,
@@ -34,6 +35,7 @@ interface BridgeConfig {
         cliTimeout: number;
         timeout: number;
         logHeartbeat: boolean;
+        rdpPort: number;
     };
 }
 
@@ -56,13 +58,13 @@ function loadConfig(): BridgeConfig {
             const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
             return {
                 agents: config.agents || {},
-                settings: config.settings || { cliTimeout: 600, timeout: 180, logHeartbeat: false }
+                settings: config.settings || { cliTimeout: 600, timeout: 180, logHeartbeat: false, rdpPort: 9222 }
             };
         } catch (e) {
             logToChannel(`Error loading config: ${e}`);
         }
     }
-    return { agents: {}, settings: { cliTimeout: 600, timeout: 180, logHeartbeat: false } };
+    return { agents: {}, settings: { cliTimeout: 600, timeout: 180, logHeartbeat: false, rdpPort: 9222 } };
 }
 
 function saveConfig(config: BridgeConfig) {
@@ -126,7 +128,8 @@ function setupGlobalCommand(extensionPath: string) {
 
 async function getAntigravityTab(): Promise<any> {
     return new Promise((resolve, reject) => {
-        http.get('http://localhost:9222/json', (res) => {
+        const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get<number>('rdpPort', 9222);
+        http.get(`http://localhost:${rdpPort}/json`, (res) => {
             let data = '';
             res.on('data', (chunk) => data += chunk);
             res.on('end', () => {
@@ -183,7 +186,21 @@ async function injectBridge() {
                 params: { expression: script + "\n" + syncScript }
             }));
         });
+        if (bridgeServer) {
+            try {
+                bridgeServer.close();
+            } catch (e) {
+                // Ignore close errors
+            }
+            bridgeServer = null;
+        }
+
         const server = http.createServer();
+        bridgeServer = server;
+        server.on('error', (err: any) => {
+            logToChannel(`[ERROR] Bridge server failed to start: ${err.message}`);
+        });
+
         server.on('request', async (req, res) => {
             const url = new URL(req.url || '/', `http://${req.headers.host}`);
             if (url.pathname === '/cmd') {
@@ -215,7 +232,15 @@ async function injectBridge() {
                 }
             }
         });
-        server.listen(9223);
+
+        const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get<number>('rdpPort', 9222);
+        let port = vscode.workspace.getConfiguration('antigravity.bridge').get<number>('port', 9223);
+        if (port === rdpPort) {
+            port = rdpPort + 1;
+            logToChannel(`[WARNING] Port conflict detected: Bridge Port is identical to RDP Port (${rdpPort}). Automatically shifting Bridge Port to ${port} to avoid conflict.`);
+        }
+        server.listen(port);
+        logToChannel(`✨ Bridge server listening on port ${port}`);
 
         ws.on('message', (data: WebSocket.Data) => {
             const msg = JSON.parse(data.toString());
@@ -246,8 +271,9 @@ function updateStatusBar(state: BridgeState) {
 
     switch (state) {
         case BridgeState.MissingRDP:
+            const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get<number>('rdpPort', 9222);
             statusBarItem.text = '$(error) AG-Bridge: Missing RDP';
-            statusBarItem.tooltip = 'Antigravity must be launched with --remote-debugging-port=9222. Please restart the IDE with debugging enabled.';
+            statusBarItem.tooltip = `Antigravity must be launched with --remote-debugging-port=${rdpPort}. Please restart the IDE with debugging enabled.`;
             statusBarItem.command = 'agbridge.inject'; // Allow retry
             break;
         case BridgeState.PromptOnce:
@@ -328,7 +354,20 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
                     config.settings.cliTimeout = message.settings.cliTimeout;
                     config.settings.timeout = message.settings.timeout;
                     config.settings.logHeartbeat = message.settings.logHeartbeat;
+                    config.settings.rdpPort = message.settings.rdpPort || 9222;
                     saveConfig(config);
+
+                    const newRdpPort = message.settings.rdpPort;
+                    if (newRdpPort && typeof newRdpPort === 'number') {
+                        await vscode.workspace.getConfiguration('antigravity.bridge').update('rdpPort', newRdpPort, vscode.ConfigurationTarget.Global);
+                    }
+                    
+                    const newPort = message.settings.port;
+                    const oldPort = vscode.workspace.getConfiguration('antigravity.bridge').get<number>('port', 9223);
+                    if (newPort && typeof newPort === 'number' && newPort !== oldPort) {
+                        await vscode.workspace.getConfiguration('antigravity.bridge').update('port', newPort, vscode.ConfigurationTarget.Global);
+                        injectBridge().catch(() => { });
+                    }
                     
                     const tab = await getAntigravityTab();
                     if (tab) {
@@ -355,7 +394,9 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
         try {
             const tab = await getAntigravityTab();
             if (!tab) {
-                this._view.webview.postMessage({ type: 'status', data: { connected: false } });
+                const port = vscode.workspace.getConfiguration('antigravity.bridge').get<number>('port', 9223);
+                const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get<number>('rdpPort', 9222);
+                this._view.webview.postMessage({ type: 'status', data: { connected: false, settings: { port, rdpPort } } });
                 return;
             }
             const ws = new WebSocket(tab.webSocketDebuggerUrl);
@@ -421,6 +462,13 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
                         updateStatusBar(BridgeState.Active);
                     }
 
+                    const port = vscode.workspace.getConfiguration('antigravity.bridge').get<number>('port', 9223);
+                    const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get<number>('rdpPort', 9222);
+                    if (browserState.settings) {
+                        browserState.settings.port = port;
+                        browserState.settings.rdpPort = rdpPort;
+                    }
+                    
                     this._view?.webview.postMessage({ 
                         type: 'status', 
                         data: { ...browserState, connected: bridgeActive, tokenCaptured: browserState.captured } 
@@ -429,7 +477,9 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
                 }
             });
         } catch (e) {
-            this._view.webview.postMessage({ type: 'status', data: { connected: false } });
+            const port = vscode.workspace.getConfiguration('antigravity.bridge').get<number>('port', 9223);
+            const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get<number>('rdpPort', 9222);
+            this._view.webview.postMessage({ type: 'status', data: { connected: false, settings: { port, rdpPort } } });
         }
     }
 }
@@ -605,4 +655,9 @@ export function activate(context: vscode.ExtensionContext) {
     }, 2000);
 }
 
-export function deactivate() { if (statusBarItem) statusBarItem.dispose(); }
+export function deactivate() {
+    if (statusBarItem) statusBarItem.dispose();
+    if (bridgeServer) {
+        bridgeServer.close();
+    }
+}

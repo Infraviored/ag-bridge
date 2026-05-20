@@ -65,6 +65,16 @@
           "type": "number",
           "default": 10,
           "description": "Total CLI timeout in MINUTES for the agbridge command (default: 10 minutes)."
+        },
+        "antigravity.bridge.port": {
+          "type": "integer",
+          "default": 9223,
+          "description": "The port on which the HTTP bridge server listens (default: 9223)."
+        },
+        "antigravity.bridge.rdpPort": {
+          "type": "integer",
+          "default": 9222,
+          "description": "The remote debugging port of the Antigravity IDE (default: 9222)."
         }
       }
     }

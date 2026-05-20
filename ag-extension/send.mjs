@@ -76,7 +76,8 @@ if (!isInspectMode) {
 const chatAgent = agents[chatIndex];
 const chatID = chatAgent?.id;
 
-const tabs = await fetch('http://localhost:9222/json').then(r => r.json());
+const rdpPort = settings.rdpPort || 9222;
+const tabs = await fetch(`http://localhost:${rdpPort}/json`).then(r => r.json());
 const tab = tabs.find(t => t.url?.includes('workbench.html') && t.type === 'page');
 if (!tab) { console.error('Tab nicht gefunden!'); process.exit(1); }
 

@@ -468,6 +468,16 @@
                         Silence Timeout (min):
                         <input type="number" id="setting-timeout" value="3" onchange="saveSettings()">
                     </label>
+                    <div class="ports-row" style="display: flex; gap: 15px; width: 100%; border-top: 1px solid #333; padding-top: 10px; margin-top: 5px; align-items: center; flex-wrap: wrap;">
+                        <label title="The remote debugging port the IDE was launched with (e.g. --remote-debugging-port=9223). This must match the IDE's launch options.">
+                            RDP Port (IDE debug):
+                            <input type="number" id="setting-rdp-port" value="9222" onchange="saveSettings()">
+                        </label>
+                        <label title="The port on which the HTTP bridge server listens to receive CLI commands. Must be a different/free port to avoid conflicts.">
+                            Bridge Port (CLI server):
+                            <input type="number" id="setting-port" value="9223" onchange="saveSettings()">
+                        </label>
+                    </div>
                     <label title="Enable detailed heartbeat logs in the browser console">
                         <input type="checkbox" id="setting-log-heartbeat" onchange="saveSettings()">
                         Log Heartbeats
@@ -535,13 +545,22 @@
             const cliMin = parseFloat(document.getElementById('setting-cli-timeout').value) || 10;
             const silenceMin = parseFloat(document.getElementById('setting-timeout').value) || 3;
             const logHeartbeat = document.getElementById('setting-log-heartbeat').checked;
+            let port = parseInt(document.getElementById('setting-port').value) || 9223;
+            const rdpPort = parseInt(document.getElementById('setting-rdp-port').value) || 9222;
+
+            if (port === rdpPort) {
+                port = rdpPort + 1;
+                document.getElementById('setting-port').value = port;
+            }
 
             vscode.postMessage({
                 command: 'saveSettings',
                 settings: {
                     cliTimeout: cliMin * 60,
                     timeout: silenceMin * 60,
-                    logHeartbeat: logHeartbeat
+                    logHeartbeat: logHeartbeat,
+                    port: port,
+                    rdpPort: rdpPort
                 }
             });
         }
@@ -598,6 +617,8 @@ GUIDELINES:
                     document.getElementById('setting-cli-timeout').value = (data.settings.cliTimeout / 60) || 10;
                     document.getElementById('setting-timeout').value = (data.settings.timeout / 60) || 3;
                     document.getElementById('setting-log-heartbeat').checked = !!data.settings.logHeartbeat;
+                    document.getElementById('setting-port').value = data.settings.port || 9223;
+                    document.getElementById('setting-rdp-port').value = data.settings.rdpPort || 9222;
                 }
 
                 const list = document.getElementById('chat-list');
