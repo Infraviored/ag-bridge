@@ -451,11 +451,6 @@
                 <span id="status-help" style="display: none;">?</span>
             </span>
         </div>
-        <h3>Registry <button id="wipe-btn" onclick="confirmWipe()">Wipe</button></h3>
-        <div id="chat-list"></div>
-        
-        <button class="copy-btn" id="copy-instr-btn" onclick="copyInstructions()">📋 Copy Delegation Prompt</button>
-
         <div class="settings-container">
             <button class="collapsible" onclick="toggleCollapsible(this)">⚙️ Bridge Settings</button>
             <div class="content">
@@ -484,8 +479,11 @@
                     </label>
                 </div>
             </div>
-
         </div>
+
+        <h3>Registry <button id="wipe-btn" onclick="confirmWipe()">Wipe</button></h3>
+        <div id="chat-list"></div>
+        <button class="copy-btn" id="copy-instr-btn" onclick="copyInstructions()">📋 Copy Delegation Prompt</button>
     </div>
     <script>
         const vscode = acquireVsCodeApi();
