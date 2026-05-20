@@ -213,6 +213,10 @@ window.fetch = async function(...args) {
                     bodyTemplate: parsed
                 };
                 log(`📡 [CAPTURE] Endpoint Secured. CSRF: ${headers['x-codeium-csrf-token']?.slice(0,8)}...`, 'success');
+                if (parsed.cascadeId && parsed.items?.[0]?.text) {
+                    const promptText = parsed.items[0].text;
+                    window.__lastPrompts[parsed.cascadeId] = promptText.length > 400 ? '...' + promptText.slice(-400) : promptText;
+                }
             } catch (e) {
                 log(`📡 [CAPTURE ERROR] Failed to parse body: ${e.message}`, 'error');
             }
