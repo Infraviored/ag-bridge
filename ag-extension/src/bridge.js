@@ -338,6 +338,13 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
 
     window.__lastPrompts[conversationId] = (prompt.length > 400) ? '...' + prompt.slice(-400) : prompt;
 
+    // 💰 CLEAR QUOTA on new start
+    const qStart = getQuotas();
+    if (qStart[conversationId]) {
+        delete qStart[conversationId];
+        setQuotas(qStart);
+    }
+
     // PROACTIVE WAKEUP
     await window.activateStream(conversationId).catch(e => log(`⚠️ Stream wakeup failed: ${e.message}`, 'warn'));
 
@@ -423,11 +430,11 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
                     // 💰 QUOTA DETECTION
                     if (ch.payload.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
                         const q = getQuotas();
-                        q[cascadeId] = true;
+                        q[conversationId] = true;
                         setQuotas(q);
                     } else if (ch.payload.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
                         const q = getQuotas();
-                        if (q[cascadeId]) { delete q[cascadeId]; setQuotas(q); }
+                        if (q[conversationId]) { delete q[conversationId]; setQuotas(q); }
                     }
 
                     if (!isFastExit) {

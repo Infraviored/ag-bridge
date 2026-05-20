@@ -92,8 +92,8 @@
         .chat-card.relinking { border-color: #f59e0b; border-style: dashed; }
         .chat-card.expired { border-left: 5px solid #f44747; }
         
-        .index-badge.busy { background: #4ec9b0; }
         .index-badge.expired { background: #f44747; }
+        .index-badge.busy { background: #4ec9b0; }
 
         @keyframes pulse-busy {
             0% { border-left-color: rgba(78, 201, 176, 0.4); }
@@ -281,7 +281,9 @@
         }
 
         .last-thought b {
-            display: block;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             color: #aaa;
             margin-bottom: 2px;
             text-transform: uppercase;
@@ -674,7 +676,7 @@ GUIDELINES:
                         '<div class="chat-id">' + (id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED')) + '</div>',
                         '<div class="chat-duty editable" onclick="defineDuty(\'' + idx + '\')" title="Redefine Agent Role">' + duty + '</div>',
                         '<div class="last-thought"><b>Last Task</b>' + lastPrompt + '</div>',
-                        '<div class="last-thought"><b>Last Response</b> ' + (lastResponseTime ? '<small style="opacity:0.5; float:right; font-weight:normal;">' + lastResponseTime + '</small>' : '') + '<br>' + lastResponseText + '</div>'
+                        '<div class="last-thought"><b>Last Response' + (lastResponseTime ? '<small style="opacity:0.5; font-weight:normal;">' + lastResponseTime + '</small>' : '') + '</b>' + lastResponseText + '</div>'
                     ].join('');
                 });
             }
