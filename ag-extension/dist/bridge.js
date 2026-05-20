@@ -186,7 +186,19 @@ window.fetch = async function(...args) {
                         if (text && activeConversationId) {
                             const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                             const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
-                            window.__lastPrompts[activeConversationId] = snippet;
+                            window.__lastPrompts[activeConversationId] = { text: snippet, ts: Date.now() };
+                        }
+                    }
+
+                    if (activeConversationId && chunk.includes('"terminationReason"')) {
+                        if (chunk.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
+                            const q = getQuotas();
+                            q[activeConversationId] = true;
+                            setQuotas(q);
+                            log(`💰 [PASSIVE] Quota exceeded for ${activeConversationId.slice(0,8)}`, 'warn');
+                        } else if (chunk.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
+                            const q = getQuotas();
+                            if (q[activeConversationId]) { delete q[activeConversationId]; setQuotas(q); }
                         }
                     }
                 }
@@ -213,6 +225,10 @@ window.fetch = async function(...args) {
                     bodyTemplate: parsed
                 };
                 log(`📡 [CAPTURE] Endpoint Secured. CSRF: ${headers['x-codeium-csrf-token']?.slice(0,8)}...`, 'success');
+                if (parsed.cascadeId && parsed.items?.[0]?.text) {
+                    const promptText = parsed.items[0].text;
+                    window.__lastPrompts[parsed.cascadeId] = { text: promptText.length > 400 ? '...' + promptText.slice(-400) : promptText, ts: Date.now() };
+                }
             } catch (e) {
                 log(`📡 [CAPTURE ERROR] Failed to parse body: ${e.message}`, 'error');
             }
@@ -286,7 +302,18 @@ window.activateStream = async function(conversationId) {
                         }
                     }
 
-                    // Trace logs for debugging
+                    if (chunk.includes('"terminationReason"')) {
+                        if (chunk.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
+                            const q = getQuotas();
+                            q[conversationId] = true;
+                            setQuotas(q);
+                            log(`💰 [PROACTIVE] Quota exceeded for ${conversationId.slice(0,8)}`, 'warn');
+                        } else if (chunk.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
+                            const q = getQuotas();
+                            if (q[conversationId]) { delete q[conversationId]; setQuotas(q); }
+                        }
+                    }
+
                     if (window.__agVerbose) {
                         log(`📥 [PROACTIVE] Chunk received (${chunk.length} bytes)`, 'debug');
                     }
@@ -336,7 +363,7 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
     busy[conversationId] = { status: 'RUNNING', windowId: window.__agId, startTime: Date.now() };
     setBusyState(busy);
 
-    window.__lastPrompts[conversationId] = (prompt.length > 400) ? '...' + prompt.slice(-400) : prompt;
+    window.__lastPrompts[conversationId] = { text: (prompt.length > 400) ? '...' + prompt.slice(-400) : prompt, ts: Date.now() };
 
     // 💰 CLEAR QUOTA on new start
     const qStart = getQuotas();

@@ -121,6 +121,66 @@
             padding-top: 20px;
         }
 
+        .quota-badge {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: bold;
+            color: #f44747;
+            border: 1px solid #f44747;
+            border-radius: 4px;
+            padding: 1px 6px;
+            margin-top: 4px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .ws-tag {
+            font-size: 10px;
+            color: #555;
+            margin-top: 2px;
+            font-family: monospace;
+        }
+
+        .bind-btn {
+            position: absolute;
+            top: 15px;
+            right: 65px;
+            background: transparent;
+            border: none;
+            color: #444;
+            font-size: 14px;
+            padding: 0;
+            min-width: 0;
+            cursor: pointer;
+            title: 'Bind to workspace';
+        }
+
+        .bind-btn:hover { color: #9cdcfe; }
+
+        .ws-filter {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+
+        .ws-filter button {
+            flex: 1;
+            padding: 5px 8px;
+            font-size: 11px;
+            border-radius: 4px;
+            border: 1px solid #444;
+            background: #252526;
+            color: #888;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .ws-filter button.active {
+            background: #0e639c;
+            color: white;
+            border-color: #0e639c;
+        }
+
         .collapsible {
             background: #252526;
             color: #9cdcfe;
@@ -482,6 +542,10 @@
         </div>
 
         <h3>Registry <button id="wipe-btn" onclick="confirmWipe()">Wipe</button></h3>
+        <div class="ws-filter">
+            <button id="ws-btn-current" class="active" onclick="setWsFilter('current')">This Workspace</button>
+            <button id="ws-btn-all" onclick="setWsFilter('all')">All Agents</button>
+        </div>
         <div id="chat-list"></div>
         <button class="copy-btn" id="copy-instr-btn" onclick="copyInstructions()">📋 Copy Delegation Prompt</button>
     </div>
@@ -510,6 +574,15 @@
         function relink(idx) { vscode.postMessage({ command: 'relink', idx }); }
         function cancelRelink(idx) { vscode.postMessage({ command: 'cancelRelink', idx }); }
         function deleteAgent(idx) { vscode.postMessage({ command: 'deleteAgent', idx }); }
+
+        let currentWsFilter = 'current';
+        function setWsFilter(mode) {
+            currentWsFilter = mode;
+            document.getElementById('ws-btn-current').classList.toggle('active', mode === 'current');
+            document.getElementById('ws-btn-all').classList.toggle('active', mode === 'all');
+            if (lastData) renderCards(lastData);
+        }
+        function bindWorkspace(idx) { vscode.postMessage({ command: 'bindWorkspace', idx }); }
         
         function formatLastResponse(res) {
             if (!res) return '';
@@ -607,6 +680,73 @@ GUIDELINES:
             });
         }
 
+        function renderCards(data) {
+            const list = document.getElementById('chat-list');
+            const allIndices = Object.keys(data.registry || {}).sort((a, b) => parseInt(a) - parseInt(b));
+
+            Array.from(list.children).forEach(child => {
+                const idx = child.getAttribute('data-idx');
+                if (!allIndices.includes(idx)) child.remove();
+            });
+
+            allIndices.forEach(idx => {
+                const id = data.registry[idx];
+                const name = data.names[idx] || 'unnamed';
+                const duty = data.duties[idx] || 'Define role...';
+                const agentWs = data.workspaces && data.workspaces[idx];
+                const isRelinking = (data.relinkMode == idx);
+                const isBusy = id && data.busyAgents && data.busyAgents[id];
+                const isExpired = id && data.quotas && data.quotas[id];
+
+                const isGlobal = !agentWs;
+                const matchesWs = isGlobal || !data.currentWorkspace || agentWs === data.currentWorkspace;
+                if (currentWsFilter === 'current' && !matchesWs) {
+                    const existing = list.querySelector(`[data-idx="${idx}"]`);
+                    if (existing) existing.remove();
+                    return;
+                }
+
+                const lastPromptData = (id && data.lastPrompts && data.lastPrompts[id]) ? data.lastPrompts[id] : null;
+                const lastPromptText = lastPromptData ? (typeof lastPromptData === 'string' ? lastPromptData : lastPromptData.text) : 'No prompt recorded...';
+                const lastPromptTime = lastPromptData && lastPromptData.ts ? formatLastResponse(lastPromptData) : '';
+                const lastResponseData = (id && data.lastOutputs && data.lastOutputs[id]) ? data.lastOutputs[id] : null;
+                const lastResponseText = typeof lastResponseData === 'string' ? lastResponseData : (lastResponseData?.text || 'No activity recorded...');
+                const lastResponseTime = formatLastResponse(lastResponseData);
+
+                let item = list.querySelector(`[data-idx="${idx}"]`);
+                if (!item) {
+                    item = document.createElement('div');
+                    item.className = 'chat-card';
+                    item.setAttribute('data-idx', idx);
+                    list.appendChild(item);
+                }
+
+                item.className = 'chat-card' + (isRelinking ? ' relinking' : '') + (isBusy ? ' busy' : '') + (isExpired ? ' expired' : '');
+
+                const relinkAction = isRelinking ? 'cancelRelink' : 'relink';
+                const relinkImg = '<img src="${linkIconUri}" width="14" style="vertical-align: middle; opacity: 0.8;">';
+                const wsBasename = agentWs ? agentWs.split('/').pop() : null;
+
+                item.innerHTML = [
+                    '<button class="delete-btn" onclick="deleteAgent(\'' + idx + '\')" title="Delete Agent">×</button>',
+                    '<button class="relink-btn ' + (isRelinking ? 'active' : '') + '" onclick="' + relinkAction + '(\'' + idx + '\')" title="' + (isRelinking ? 'Cancel Relink' : 'Relink to current chat') + '">' + relinkImg + '</button>',
+                    '<button class="bind-btn" onclick="bindWorkspace(\'' + idx + '\')" title="' + (agentWs ? 'Bound to: ' + wsBasename + ' (click to rebind)' : 'Bind to a workspace') + '">◎</button>',
+                    '<div style="display: flex; align-items: center; margin-bottom: 5px; justify-content: space-between;">',
+                    '<div>',
+                    '<span class="index-badge ' + (isRelinking ? 'relinking' : '') + (isBusy ? ' busy' : '') + (isExpired ? ' expired' : '') + '" onclick="changeIndex(\'' + idx + '\')" title="Change Agent Index">Agent ' + idx + '</span>',
+                    '<span class="chat-name editable" onclick="rename(\'' + idx + '\')" title="Rename Agent">' + name + '</span>',
+                    '</div>',
+                    '</div>',
+                    '<div class="chat-id">' + (id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED')) + '</div>',
+                    (isExpired ? '<div class="quota-badge">Quota Exceeded</div>' : ''),
+                    (wsBasename && currentWsFilter === 'all' ? '<div class="ws-tag">ws: ' + wsBasename + '</div>' : ''),
+                    '<div class="chat-duty editable" onclick="defineDuty(\'' + idx + '\')" title="Redefine Agent Role">' + duty + '</div>',
+                    '<div class="last-thought"><b>Last Task' + (lastPromptTime ? '<small style="opacity:0.5; font-weight:normal;">' + lastPromptTime + '</small>' : '') + '</b>' + lastPromptText + '</div>',
+                    '<div class="last-thought"><b>Last Response' + (lastResponseTime ? '<small style="opacity:0.5; font-weight:normal;">' + lastResponseTime + '</small>' : '') + '</b>' + lastResponseText + '</div>'
+                ].join('');
+            });
+        }
+
         window.addEventListener('message', event => {
             const { type, data } = event.data;
             if (type === 'status') {
@@ -619,13 +759,10 @@ GUIDELINES:
                     document.getElementById('setting-rdp-port').value = data.settings.rdpPort || 9222;
                 }
 
-                const list = document.getElementById('chat-list');
                 const bridgeStatus = document.getElementById('bridge-status');
-                
                 if (bridgeStatus) {
                     const helpIcon = document.getElementById('status-help');
                     const statusContainer = document.getElementById('status-container');
-                    
                     if (!data.connected) {
                         bridgeStatus.innerText = 'Offline';
                         bridgeStatus.style.color = '#f44747';
@@ -648,56 +785,7 @@ GUIDELINES:
                     }
                 }
 
-                const allIndices = Object.keys(data.registry || {}).sort((a, b) => parseInt(a) - parseInt(b));
-                
-                // 🚀 SMOOTH UPDATE: Remove cards that are no longer in the registry
-                Array.from(list.children).forEach(child => {
-                    const idx = child.getAttribute('data-idx');
-                    if (!allIndices.includes(idx)) child.remove();
-                });
-
-                allIndices.forEach(idx => {
-                    const id = data.registry[idx];
-                    const name = data.names[idx] || 'unnamed';
-                    const duty = data.duties[idx] || 'Define role...';
-                    const isRelinking = (data.relinkMode == idx);
-                    const isBusy = id && data.busyAgents && data.busyAgents[id];
-                    const isExpired = id && data.quotas && data.quotas[id];
-                    const lastPrompt = (id && data.lastPrompts && data.lastPrompts[id]) ? data.lastPrompts[id] : 'No prompt recorded...';
-                    const lastResponseData = (id && data.lastOutputs && data.lastOutputs[id]) ? data.lastOutputs[id] : null;
-                    const lastResponseText = typeof lastResponseData === 'string' ? lastResponseData : (lastResponseData?.text || 'No activity recorded...');
-                    const lastResponseTime = formatLastResponse(lastResponseData);
-
-                    let item = list.querySelector(`[data-idx="${idx}"]`);
-                    if (!item) {
-                        item = document.createElement('div');
-                        item.className = 'chat-card';
-                        item.setAttribute('data-idx', idx);
-                        list.appendChild(item);
-                    }
-
-                    // Update classes without destroying the element (preserves animations)
-                    item.className = 'chat-card' + (isRelinking ? ' relinking' : '') + (isBusy ? ' busy' : '') + (isExpired ? ' expired' : '');
-
-                    const relinkAction = isRelinking ? 'cancelRelink' : 'relink';
-                    const relinkImg = '<img src="${linkIconUri}" width="14" style="vertical-align: middle; opacity: 0.8;">';
-                    
-                    // Selective innerHTML update for fields
-                    item.innerHTML = [
-                        '<button class="delete-btn" onclick="deleteAgent(\'' + idx + '\')" title="Delete Agent">×</button>',
-                        '<button class="relink-btn ' + (isRelinking ? 'active' : '') + '" onclick="' + relinkAction + '(\'' + idx + '\')" title="' + (isRelinking ? 'Cancel Relink' : 'Relink to current chat') + '">' + relinkImg + '</button>',
-                        '<div style="display: flex; align-items: center; margin-bottom: 5px; justify-content: space-between;">',
-                        '<div>',
-                        '<span class="index-badge ' + (isRelinking ? 'relinking' : '') + (isBusy ? ' busy' : '') + (isExpired ? ' expired' : '') + '" onclick="changeIndex(\'' + idx + '\')" title="Change Agent Index">Agent ' + idx + '</span>',
-                        '<span class="chat-name editable" onclick="rename(\'' + idx + '\')" title="Rename Agent">' + name + '</span>',
-                        '</div>',
-                        '</div>',
-                        '<div class="chat-id">' + (id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED')) + '</div>',
-                        '<div class="chat-duty editable" onclick="defineDuty(\'' + idx + '\')" title="Redefine Agent Role">' + duty + '</div>',
-                        '<div class="last-thought"><b>Last Task</b>' + lastPrompt + '</div>',
-                        '<div class="last-thought"><b>Last Response' + (lastResponseTime ? '<small style="opacity:0.5; font-weight:normal;">' + lastResponseTime + '</small>' : '') + '</b>' + lastResponseText + '</div>'
-                    ].join('');
-                });
+                renderCards(data);
             }
         });
         setInterval(refresh, 2000);

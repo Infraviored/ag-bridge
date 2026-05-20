@@ -27,6 +27,7 @@ interface Agent {
     id: string;
     name: string;
     duty: string;
+    workspace?: string;
 }
 
 interface BridgeConfig {
@@ -349,6 +350,27 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
                 case 'cancelRelink': await cancelRelink(message.idx); break;
                 case 'deleteAgent': await deleteAgent(message.idx); break;
                 case 'refresh': this.update(); break;
+                case 'bindWorkspace':
+                    const bindConfig = loadConfig();
+                    const currentWs = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                    const wsName = vscode.workspace.workspaceFolders?.[0]?.name || 'Unknown';
+                    const choice = await vscode.window.showQuickPick(
+                        [
+                            { label: `Bind to current workspace: ${wsName}`, value: currentWs },
+                            { label: 'Make global (no workspace binding)', value: '' }
+                        ],
+                        { placeHolder: `Workspace binding for Agent ${message.idx}` }
+                    );
+                    if (choice !== undefined) {
+                        if (!bindConfig.agents[message.idx]) bindConfig.agents[message.idx] = { id: '', name: '', duty: '' };
+                        if (choice.value) {
+                            bindConfig.agents[message.idx].workspace = choice.value;
+                        } else {
+                            delete bindConfig.agents[message.idx].workspace;
+                        }
+                        saveConfig(bindConfig);
+                    }
+                    break;
                 case 'saveSettings':
                     const config = loadConfig();
                     config.settings.cliTimeout = message.settings.cliTimeout;
@@ -405,10 +427,12 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
                 const registry: Record<string, string> = {};
                 const names: Record<string, string> = {};
                 const duties: Record<string, string> = {};
+                const workspaces: Record<string, string> = {};
                 Object.entries(config.agents).forEach(([idx, a]) => {
                     registry[idx] = a.id;
                     names[idx] = a.name;
                     duties[idx] = a.duty;
+                    if (a.workspace) workspaces[idx] = a.workspace;
                 });
 
                 const syncScript = `(function(){
@@ -445,10 +469,11 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
                     const browserState = JSON.parse(msg.result?.result?.value || '{}');
                     const config = loadConfig();
                     let changed = false;
+                    const currentWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
                     Object.entries(browserState.registry).forEach(([idx, id]) => {
                         const idStr = id as string;
                         if (!config.agents[idx]) {
-                            config.agents[idx] = { id: idStr, name: `Agent ${idx}`, duty: 'General Intelligence' };
+                            config.agents[idx] = { id: idStr, name: `Agent ${idx}`, duty: 'General Intelligence', workspace: currentWorkspace };
                             changed = true;
                         } else if (config.agents[idx].id !== idStr) {
                             config.agents[idx].id = idStr;
@@ -468,10 +493,21 @@ class DashboardViewProvider implements vscode.WebviewViewProvider {
                         browserState.settings.port = port;
                         browserState.settings.rdpPort = rdpPort;
                     }
-                    
+
+                    const workspacesPayload: Record<string, string> = {};
+                    Object.entries(config.agents).forEach(([idx, a]) => {
+                        if (a.workspace) workspacesPayload[idx] = a.workspace;
+                    });
+
                     this._view?.webview.postMessage({ 
                         type: 'status', 
-                        data: { ...browserState, connected: bridgeActive, tokenCaptured: browserState.captured } 
+                        data: { 
+                            ...browserState, 
+                            connected: bridgeActive, 
+                            tokenCaptured: browserState.captured,
+                            currentWorkspace,
+                            workspaces: workspacesPayload
+                        } 
                     });
                     ws.close();
                 }

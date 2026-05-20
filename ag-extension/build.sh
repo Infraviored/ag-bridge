@@ -32,18 +32,18 @@ rm -f ag-bridge-extension.vsix
 # 5. Install
 echo "🚚 Installing to Profiles..."
 if command -v antigravity &> /dev/null; then
-    antigravity --install-extension ag-bridge-extension.vsix --force
-    antigravity --user-data-dir /home/schneider/.config/Antigravity-B --install-extension ag-bridge-extension.vsix --force
+    antigravity --install-extension ag-bridge-extension.vsix --force || true
+    antigravity --user-data-dir /home/schneider/.config/Antigravity-B --install-extension ag-bridge-extension.vsix --force || true
 fi
 
 if [ -f "/opt/Antigravity-IDE/bin/antigravity-ide" ]; then
-    /opt/Antigravity-IDE/bin/antigravity-ide --install-extension ag-bridge-extension.vsix --force
-    /opt/Antigravity-IDE/bin/antigravity-ide --user-data-dir /home/schneider/.config/Antigravity-IDE-B --install-extension ag-bridge-extension.vsix --force
-    /opt/Antigravity-IDE/bin/antigravity-ide --user-data-dir /home/schneider/.config/Antigravity-IDE-C --install-extension ag-bridge-extension.vsix --force
+    /opt/Antigravity-IDE/bin/antigravity-ide --install-extension ag-bridge-extension.vsix --force || true
+    /opt/Antigravity-IDE/bin/antigravity-ide --user-data-dir /home/schneider/.config/Antigravity-IDE-B --install-extension ag-bridge-extension.vsix --force || true
+    /opt/Antigravity-IDE/bin/antigravity-ide --user-data-dir /home/schneider/.config/Antigravity-IDE-C --install-extension ag-bridge-extension.vsix --force || true
 elif [ -f "/opt/Antigravity-IDE/antigravity-ide" ]; then
-    /opt/Antigravity-IDE/antigravity-ide --install-extension ag-bridge-extension.vsix --force
-    /opt/Antigravity-IDE/antigravity-ide --user-data-dir /home/schneider/.config/Antigravity-IDE-B --install-extension ag-bridge-extension.vsix --force
-    /opt/Antigravity-IDE/antigravity-ide --user-data-dir /home/schneider/.config/Antigravity-IDE-C --install-extension ag-bridge-extension.vsix --force
+    /opt/Antigravity-IDE/antigravity-ide --install-extension ag-bridge-extension.vsix --force || true
+    /opt/Antigravity-IDE/antigravity-ide --user-data-dir /home/schneider/.config/Antigravity-IDE-B --install-extension ag-bridge-extension.vsix --force || true
+    /opt/Antigravity-IDE/antigravity-ide --user-data-dir /home/schneider/.config/Antigravity-IDE-C --install-extension ag-bridge-extension.vsix --force || true
 fi
 
 echo "✨ SUCCESS: Antigravity Bridge updated!"
