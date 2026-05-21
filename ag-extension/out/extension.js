@@ -366,6 +366,20 @@ class DashboardViewProvider {
                 case 'refresh':
                     this.update();
                     break;
+                case 'clearQuota':
+                    const clearConfig = loadConfig();
+                    const clearAgent = clearConfig.agents[message.idx];
+                    if (clearAgent && clearAgent.id) {
+                        const tab = await getAntigravityTab();
+                        if (tab) {
+                            const ws = new ws_1.default(tab.webSocketDebuggerUrl);
+                            ws.on('open', () => {
+                                ws.send(JSON.stringify({ id: 108, method: 'Runtime.evaluate', params: { expression: `clearQuota("${clearAgent.id}");` } }));
+                                ws.on('message', () => ws.close());
+                            });
+                        }
+                    }
+                    break;
                 case 'bindWorkspace':
                     const bindConfig = loadConfig();
                     const currentWs = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -468,6 +482,7 @@ class DashboardViewProvider {
                     lastPrompts: window.__lastPrompts, 
                     busyAgents: JSON.parse(localStorage.getItem('__ag_busy') || '{}'), 
                     quotas: JSON.parse(localStorage.getItem('__ag_quotas') || '{}'),
+                    models: JSON.parse(localStorage.getItem('__ag_models') || '{}'),
                     captured: !!window.__agCaptured?.last, 
                     relinkMode: window.__relinkMode, 
                     settings: { cliTimeout: window.__agCliTimeout / 1000, timeout: window.__agTimeout / 1000, logHeartbeat: window.__agLogHeartbeat }

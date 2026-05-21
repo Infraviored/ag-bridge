@@ -22,11 +22,63 @@ function setBusyState(busy) {
     window.__busyAgents = busy;
 }
 function getQuotas() {
-    try { return JSON.parse(localStorage.getItem('__ag_quotas') || '{}'); } catch(e) { return {}; }
+    try {
+        const q = JSON.parse(localStorage.getItem('__ag_quotas') || '{}');
+        const now = Date.now();
+        let changed = false;
+        for (const id in q) {
+            const val = q[id];
+            if (typeof val === 'string') {
+                const resetTime = new Date(val).getTime();
+                if (!isNaN(resetTime) && resetTime <= now) {
+                    delete q[id];
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            localStorage.setItem('__ag_quotas', JSON.stringify(q));
+            window.__agentQuotas = q;
+        }
+        return q;
+    } catch(e) { return {}; }
 }
 function setQuotas(q) {
     localStorage.setItem('__ag_quotas', JSON.stringify(q));
     window.__agentQuotas = q;
+}
+function markQuotaExpired(conversationId, resetAt) {
+    const q = getQuotas();
+    q[conversationId] = resetAt || true;
+    setQuotas(q);
+}
+function clearQuota(conversationId) {
+    const q = getQuotas();
+    if (q[conversationId]) { delete q[conversationId]; setQuotas(q); }
+}
+function extractQuotaReset(chunk) {
+    const m = chunk.match(/"quotaResetTimeStamp"\s*:\s*"([^"]+)"/);
+    return m ? m[1] : null;
+}
+function getModels() {
+    try { return JSON.parse(localStorage.getItem('__ag_models') || '{}'); } catch(e) { return {}; }
+}
+function setModels(m) {
+    localStorage.setItem('__ag_models', JSON.stringify(m));
+    window.__agentModels = m;
+}
+function updateModel(conversationId, modelName) {
+    if (!conversationId || !modelName) return;
+    const m = getModels();
+    if (m[conversationId] !== modelName) {
+        m[conversationId] = modelName;
+        setModels(m);
+        log(`🤖 Model detected for ${conversationId.slice(0,8)}: ${modelName}`, 'success');
+    }
+}
+function extractModelName(chunk) {
+    const m = chunk.match(/"modelName"\s*:\s*"([^"]+)"/) || chunk.match(/"generatorModel"\s*:\s*"([^"]+)"/);
+    return m ? m[1] : null;
 }
 
 window.__agId = Math.random().toString(36).substring(7);
@@ -34,6 +86,7 @@ window.__agLogs = window.__agLogs || [];
 window.__agReadLog = window.__agReadLog || [];
 window.__chatRegistry = getRegistry();
 window.__agentQuotas = getQuotas();
+window.__agentModels = getModels();
 window.__chatNames = JSON.parse(localStorage.getItem('__ag_names') || '{}');
 
 // ── STARTUP SANITIZER (Only clear VERY old ghosts, e.g. > 30 mins) ──
@@ -59,8 +112,17 @@ for (let i = 0; i < localStorage.length; i++) {
 window.__activeReaders = {};
 window.__activeStreamCount = 0;
 window.__cmdActive = false;
-window.__lastOutputs = window.__lastOutputs || {};
-window.__lastPrompts = window.__lastPrompts || {};
+try {
+    window.__lastOutputs = JSON.parse(localStorage.getItem('__ag_last_outputs') || '{}');
+} catch (e) {
+    window.__lastOutputs = {};
+}
+try {
+    window.__lastPrompts = JSON.parse(localStorage.getItem('__ag_last_prompts') || '{}');
+} catch (e) {
+    window.__lastPrompts = {};
+}
+
 window.__activeTrajectories = window.__activeTrajectories || {};
 window.__agLogHeartbeat = localStorage.getItem('__ag_log_heartbeat') === 'true';
 window.__agCliTimeout = parseInt(localStorage.getItem('__ag_cli_timeout') || '600000');
@@ -171,6 +233,12 @@ window.fetch = async function(...args) {
                         }
                     }
 
+                    const modelName = extractModelName(chunk);
+                    if (modelName && activeConversationId) {
+                        updateModel(activeConversationId, modelName);
+                        clearQuota(activeConversationId);
+                    }
+
                     // Instant peek for the user
                     if (chunk.includes('modifiedResponse')) {
                         const text = chunk.match(/"modifiedResponse":"((?:[^"\\]|\\.)*)"/)?.[1];
@@ -178,6 +246,7 @@ window.fetch = async function(...args) {
                             const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                             const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
                             window.__lastOutputs[activeConversationId] = { text: snippet, ts: Date.now() };
+                            localStorage.setItem('__ag_last_outputs', JSON.stringify(window.__lastOutputs));
                         }
                     }
 
@@ -187,19 +256,21 @@ window.fetch = async function(...args) {
                             const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                             const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
                             window.__lastPrompts[activeConversationId] = { text: snippet, ts: Date.now() };
+                            localStorage.setItem('__ag_last_prompts', JSON.stringify(window.__lastPrompts));
                         }
                     }
 
                     if (activeConversationId && chunk.includes('"terminationReason"')) {
                         if (chunk.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
-                            const q = getQuotas();
-                            q[activeConversationId] = true;
-                            setQuotas(q);
-                            log(`💰 [PASSIVE] Quota exceeded for ${activeConversationId.slice(0,8)}`, 'warn');
+                            markQuotaExpired(activeConversationId, extractQuotaReset(chunk));
+                            log(`💰 [PASSIVE] Quota (terminationReason) for ${activeConversationId.slice(0,8)}`, 'warn');
                         } else if (chunk.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
-                            const q = getQuotas();
-                            if (q[activeConversationId]) { delete q[activeConversationId]; setQuotas(q); }
+                            clearQuota(activeConversationId);
                         }
+                    }
+                    if (activeConversationId && chunk.includes('"CORTEX_STEP_TYPE_ERROR_MESSAGE"') && chunk.includes('"errorCode":429')) {
+                        markQuotaExpired(activeConversationId, extractQuotaReset(chunk));
+                        log(`💰 [PASSIVE] Quota (429 step) for ${activeConversationId.slice(0,8)} | reset: ${extractQuotaReset(chunk) || 'unknown'}`, 'warn');
                     }
                 }
             } catch (e) { 
@@ -228,6 +299,7 @@ window.fetch = async function(...args) {
                 if (parsed.cascadeId && parsed.items?.[0]?.text) {
                     const promptText = parsed.items[0].text;
                     window.__lastPrompts[parsed.cascadeId] = { text: promptText.length > 400 ? '...' + promptText.slice(-400) : promptText, ts: Date.now() };
+                    localStorage.setItem('__ag_last_prompts', JSON.stringify(window.__lastPrompts));
                 }
             } catch (e) {
                 log(`📡 [CAPTURE ERROR] Failed to parse body: ${e.message}`, 'error');
@@ -292,6 +364,12 @@ window.activateStream = async function(conversationId) {
                     const chunk = decoder.decode(value, { stream: true });
                     window.__agReadLog.push({ ts: Date.now(), source: 'proactive', conversationId, payload: chunk });
                     
+                    const modelName = extractModelName(chunk);
+                    if (modelName) {
+                        updateModel(conversationId, modelName);
+                        clearQuota(conversationId);
+                    }
+
                     // Dashboard updates for background agents
                     if (chunk.includes('modifiedResponse')) {
                         const text = chunk.match(/"modifiedResponse":"((?:[^"\\]|\\.)*)"/)?.[1];
@@ -299,19 +377,21 @@ window.activateStream = async function(conversationId) {
                             const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                             const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
                             window.__lastOutputs[conversationId] = { text: snippet, ts: Date.now() };
+                            localStorage.setItem('__ag_last_outputs', JSON.stringify(window.__lastOutputs));
                         }
                     }
 
                     if (chunk.includes('"terminationReason"')) {
                         if (chunk.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
-                            const q = getQuotas();
-                            q[conversationId] = true;
-                            setQuotas(q);
-                            log(`💰 [PROACTIVE] Quota exceeded for ${conversationId.slice(0,8)}`, 'warn');
+                            markQuotaExpired(conversationId, extractQuotaReset(chunk));
+                            log(`💰 [PROACTIVE] Quota (terminationReason) for ${conversationId.slice(0,8)}`, 'warn');
                         } else if (chunk.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
-                            const q = getQuotas();
-                            if (q[conversationId]) { delete q[conversationId]; setQuotas(q); }
+                            clearQuota(conversationId);
                         }
+                    }
+                    if (chunk.includes('"CORTEX_STEP_TYPE_ERROR_MESSAGE"') && chunk.includes('"errorCode":429')) {
+                        markQuotaExpired(conversationId, extractQuotaReset(chunk));
+                        log(`💰 [PROACTIVE] Quota (429 step) for ${conversationId.slice(0,8)} | reset: ${extractQuotaReset(chunk) || 'unknown'}`, 'warn');
                     }
 
                     if (window.__agVerbose) {
@@ -364,6 +444,7 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
     setBusyState(busy);
 
     window.__lastPrompts[conversationId] = { text: (prompt.length > 400) ? '...' + prompt.slice(-400) : prompt, ts: Date.now() };
+    localStorage.setItem('__ag_last_prompts', JSON.stringify(window.__lastPrompts));
 
     // 💰 CLEAR QUOTA on new start
     const qStart = getQuotas();
@@ -456,12 +537,9 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
                     
                     // 💰 QUOTA DETECTION
                     if (ch.payload.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
-                        const q = getQuotas();
-                        q[conversationId] = true;
-                        setQuotas(q);
+                        markQuotaExpired(conversationId, extractQuotaReset(ch.payload));
                     } else if (ch.payload.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
-                        const q = getQuotas();
-                        if (q[conversationId]) { delete q[conversationId]; setQuotas(q); }
+                        clearQuota(conversationId);
                     }
 
                     if (!isFastExit) {
