@@ -8,26 +8,32 @@
             font-family: 'Segoe UI', sans-serif;
             background: #1e1e1e;
             color: #d4d4d4;
-            padding: 20px;
+            padding: 10px;
             line-height: 1.5;
+            overflow-x: hidden;
         }
 
         .container {
             position: relative;
             background: rgba(45, 45, 45, 0.8);
             border-radius: 12px;
-            padding: 20px;
+            padding: 15px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
             border: 1px solid rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
+            overflow-x: hidden;
         }
 
         h2 {
             color: #569cd6;
-            margin: 0 0 20px 0;
+            margin: 0 0 15px 0;
             display: flex;
             align-items: center;
             gap: 10px;
+            font-size: 1.4em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         h3 {
@@ -79,21 +85,20 @@
             overflow: hidden;
         }
 
-        .chat-card.busy {
-            border-left: 5px solid #4ec9b0;
-            animation: pulse-busy 2s infinite;
+        .chat-card.busy { 
+            border-left: 5px solid #4ec9b0; 
+            animation: pulse-busy 2s infinite; 
         }
+        .chat-card.relinking { border-color: #f59e0b; border-style: dashed; }
+        .chat-card.expired { border-left: 5px solid #f44747; }
+        
+        .index-badge.expired { background: #f44747; }
+        .index-badge.busy { background: #4ec9b0; }
 
         @keyframes pulse-busy {
-            0% { border-left-color: #4ec9b0; }
-            50% { border-left-color: #059669; box-shadow: 0 0 10px rgba(78, 201, 176, 0.3); }
-            100% { border-left-color: #4ec9b0; }
-        }
-
-        .chat-card.relinking {
-            border-left-color: #f59e0b;
-            background: rgba(245, 158, 11, 0.05);
-            animation: pulse 2s infinite;
+            0% { border-left-color: rgba(78, 201, 176, 0.4); }
+            50% { border-left-color: #4ec9b0; }
+            100% { border-left-color: rgba(78, 201, 176, 0.4); }
         }
 
         @keyframes pulse {
@@ -114,6 +119,87 @@
             margin-top: 20px;
             border-top: 1px solid #333;
             padding-top: 20px;
+        }
+
+        .quota-badge {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: bold;
+            color: #f44747;
+            border: 1px solid #f44747;
+            border-radius: 4px;
+            padding: 1px 6px;
+            margin-top: 4px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .quota-badge:hover {
+            background: rgba(244, 71, 71, 0.2);
+        }
+
+        .model-badge {
+            display: inline-block;
+            font-size: 9px;
+            font-weight: bold;
+            color: #4ec9b0;
+            border: 1px solid rgba(78, 201, 176, 0.4);
+            background: rgba(78, 201, 176, 0.1);
+            border-radius: 4px;
+            padding: 1px 5px;
+            margin-left: 6px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            vertical-align: middle;
+        }
+
+        .ws-tag {
+            font-size: 10px;
+            color: #555;
+            margin-top: 2px;
+            font-family: monospace;
+        }
+
+        .bind-btn {
+            position: absolute;
+            top: 15px;
+            right: 65px;
+            background: transparent;
+            border: none;
+            color: #444;
+            font-size: 14px;
+            padding: 0;
+            min-width: 0;
+            cursor: pointer;
+            title: 'Bind to workspace';
+        }
+
+        .bind-btn:hover { color: #9cdcfe; }
+
+        .ws-filter {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+
+        .ws-filter button {
+            flex: 1;
+            padding: 5px 8px;
+            font-size: 11px;
+            border-radius: 4px;
+            border: 1px solid #444;
+            background: #252526;
+            color: #888;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .ws-filter button.active {
+            background: #0e639c;
+            color: white;
+            border-color: #0e639c;
         }
 
         .collapsible {
@@ -273,10 +359,25 @@
             -webkit-box-orient: vertical;
             overflow: hidden;
             height: 46px; /* Fixed height for 3 lines */
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .last-thought:hover {
+            color: #ccc;
+        }
+
+        .last-thought.expanded {
+            display: block;
+            -webkit-line-clamp: none;
+            height: auto;
+            overflow: visible;
         }
 
         .last-thought b {
-            display: block;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             color: #aaa;
             margin-bottom: 2px;
             text-transform: uppercase;
@@ -314,6 +415,26 @@
             border: none;
         }
 
+        #status-help {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            border: 1px solid currentColor;
+            font-size: 10px;
+            font-weight: bold;
+            vertical-align: middle;
+            transition: all 0.2s;
+        }
+
+        #status-container {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
         button.danger {
             color: #f44747;
             border-color: #f44747;
@@ -337,6 +458,26 @@
             width: 100%;
             margin-top: 20px;
             padding: 10px;
+        }
+
+        #wipe-btn {
+            background: #333;
+            color: #888;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-left: 10px;
+            cursor: pointer;
+            border: 1px solid #444;
+            font-size: 11px;
+            transition: all 0.2s;
+            vertical-align: middle;
+            font-family: monospace;
+        }
+
+        #wipe-btn:hover {
+            background: #444;
+            color: #f44747;
+            border-color: #f44747;
         }
 
         .delete-btn {
@@ -396,15 +537,14 @@
 
 <body>
     <div class="container">
-        <button class="refresh-btn" onclick="refresh()">↻ Refresh</button>
-        <h2><img src="${iconUri}" width="28" style="vertical-align: middle;"> Antigravity Command Center</h2>
-        <div class="status-row"><span>Status:</span><span id="bridge-status">Offline</span></div>
-        <div class="status-row"><span>Gateway:</span><span id="token-status">-</span></div>
-        <h3>Registry <button class="danger" onclick="resetAll()">Wipe</button></h3>
-        <div id="chat-list"></div>
-        
-        <button class="copy-btn" id="copy-instr-btn" onclick="copyInstructions()">📋 Copy Delegation Prompt</button>
-
+        <h2><img src="${iconUri}" width="28" style="vertical-align: middle;"> AG Bridge</h2>
+        <div class="status-row">
+            <span>Status:</span>
+            <span id="status-container">
+                <span id="bridge-status">Offline</span>
+                <span id="status-help" style="display: none;">?</span>
+            </span>
+        </div>
         <div class="settings-container">
             <button class="collapsible" onclick="toggleCollapsible(this)">⚙️ Bridge Settings</button>
             <div class="content">
@@ -417,14 +557,31 @@
                         Silence Timeout (min):
                         <input type="number" id="setting-timeout" value="3" onchange="saveSettings()">
                     </label>
+                    <div class="ports-row" style="display: flex; gap: 15px; width: 100%; border-top: 1px solid #333; padding-top: 10px; margin-top: 5px; align-items: center; flex-wrap: wrap;">
+                        <label title="The remote debugging port the IDE was launched with (e.g. --remote-debugging-port=9223). This must match the IDE's launch options.">
+                            RDP Port (IDE debug):
+                            <input type="number" id="setting-rdp-port" value="9222" onchange="saveSettings()">
+                        </label>
+                        <label title="The port on which the HTTP bridge server listens to receive CLI commands. Must be a different/free port to avoid conflicts.">
+                            Bridge Port (CLI server):
+                            <input type="number" id="setting-port" value="9223" onchange="saveSettings()">
+                        </label>
+                    </div>
                     <label title="Enable detailed heartbeat logs in the browser console">
                         <input type="checkbox" id="setting-log-heartbeat" onchange="saveSettings()">
                         Log Heartbeats
                     </label>
                 </div>
             </div>
-
         </div>
+
+        <h3>Registry <button id="wipe-btn" onclick="confirmWipe()">Wipe</button></h3>
+        <div class="ws-filter">
+            <button id="ws-btn-current" class="active" onclick="setWsFilter('current')">This Workspace</button>
+            <button id="ws-btn-all" onclick="setWsFilter('all')">All Agents</button>
+        </div>
+        <div id="chat-list"></div>
+        <button class="copy-btn" id="copy-instr-btn" onclick="copyInstructions()">📋 Copy Delegation Prompt</button>
     </div>
     <script>
         const vscode = acquireVsCodeApi();
@@ -443,10 +600,59 @@
         function rename(idx) { vscode.postMessage({ command: 'rename', idx }); }
         function defineDuty(idx) { vscode.postMessage({ command: 'defineDuty', idx }); }
         function resetAll() { vscode.postMessage({ command: 'resetAll' }); }
+        function confirmWipe() {
+            if (confirm("Are you sure you want to wipe the registry? This will unlink all agents.")) {
+                resetAll();
+            }
+        }
         function relink(idx) { vscode.postMessage({ command: 'relink', idx }); }
         function cancelRelink(idx) { vscode.postMessage({ command: 'cancelRelink', idx }); }
         function deleteAgent(idx) { vscode.postMessage({ command: 'deleteAgent', idx }); }
+
+        let currentWsFilter = 'current';
+        function setWsFilter(mode) {
+            currentWsFilter = mode;
+            document.getElementById('ws-btn-current').classList.toggle('active', mode === 'current');
+            document.getElementById('ws-btn-all').classList.toggle('active', mode === 'all');
+            if (lastData) renderCards(lastData);
+        }
+        function bindWorkspace(idx) { vscode.postMessage({ command: 'bindWorkspace', idx }); }
         
+        window.__expandedThoughts = window.__expandedThoughts || {};
+        function toggleLastThought(idx, type) {
+            const key = idx + '-' + type;
+            window.__expandedThoughts[key] = !window.__expandedThoughts[key];
+            if (lastData) renderCards(lastData);
+        }
+        function clearAgentQuota(idx) {
+            vscode.postMessage({ command: 'clearQuota', idx });
+        }
+
+        function formatLastResponse(res) {
+            if (!res) return '';
+            const ts = typeof res === 'string' ? null : res.ts;
+            if (!ts) return '';
+            
+            const date = new Date(ts);
+            const now = new Date();
+            const diff = now.getTime() - date.getTime();
+            const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            
+            if (diff < 86400000 && date.getDate() === now.getDate()) {
+                return timeStr;
+            } else if (diff < 172800000) {
+                return 'Yesterday ' + timeStr;
+            } else {
+                return date.toLocaleDateString() + ' ' + timeStr;
+            }
+        }
+
+        function formatResetTime(isoTs) {
+            try {
+                return new Date(isoTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } catch(e) { return ''; }
+        }
+
         function toggleCollapsible(btn) {
             btn.classList.toggle("active");
             var content = btn.nextElementSibling;
@@ -460,13 +666,22 @@
             const cliMin = parseFloat(document.getElementById('setting-cli-timeout').value) || 10;
             const silenceMin = parseFloat(document.getElementById('setting-timeout').value) || 3;
             const logHeartbeat = document.getElementById('setting-log-heartbeat').checked;
+            let port = parseInt(document.getElementById('setting-port').value) || 9223;
+            const rdpPort = parseInt(document.getElementById('setting-rdp-port').value) || 9222;
+
+            if (port === rdpPort) {
+                port = rdpPort + 1;
+                document.getElementById('setting-port').value = port;
+            }
 
             vscode.postMessage({
                 command: 'saveSettings',
                 settings: {
                     cliTimeout: cliMin * 60,
                     timeout: silenceMin * 60,
-                    logHeartbeat: logHeartbeat
+                    logHeartbeat: logHeartbeat,
+                    port: port,
+                    rdpPort: rdpPort
                 }
             });
         }
@@ -476,36 +691,119 @@
             const cliMin = document.getElementById('setting-cli-timeout').value || 10;
             const silenceMin = document.getElementById('setting-timeout').value || 3;
             
-            const prompt = `--- BRIDGE DELEGATION PROTOCOL ---
-1. You are an AGENTic worker controlled via the Antigravity Bridge.
-2. Communicate ONLY via established terminal patterns.
-3. Your execution is monitored:
-   - Session Hard Timeout: ${cliMin} minutes.
-   - Silence/Tool Timeout: ${silenceMin} minutes.
-4. If you exceed these, the Bridge will terminate the session.
-----------------------------------`;
+            const basePrompt = `# ANTIGRAVITY ORCHESTRATION PROTOCOL
 
-            let agents = "";
+You are the Orchestrator. You have direct control over specialized sub-agents via the 'agbridge' CLI. Use them to delegate complex, parallel, or domain-specific tasks.
+
+CONTROL INTERFACE:
+- Dispatch:    agbridge <idx> "prompt" (Persistent, context-aware sessions)
+- Supervision: Add --all to capture the complete execution trajectory.
+- Inspection:  agbridge --inspect to monitor global health and trajectory mapping.
+
+TRUE PARALLELISM:
+You can dispatch multiple agents simultaneously by using 'run_in_background: true' in your tool calls. The Bridge tracks each agent independently; you will be notified as each completes.
+
+SESSION CONSTRAINTS:
+- Hard Timeout: ${cliMin} minutes (The absolute maximum duration for a single command).
+- Activity Guard: ${silenceMin} minutes (Monitors for silence or stuck tool calls).
+- Note: Agents can perform long-running tasks as long as they provide periodic progress updates.
+
+AVAILABLE AGENTS:
+{{agents}}
+
+GUIDELINES:
+1. Delegation:  Assign tasks based on the specific agent roles defined above.
+2. Persistence:  Sessions are long-lived; you don't need to re-explain shared context.
+3. Efficiency:   Use parallel dispatch for multi-agent workflows (e.g., Frontus + Backus).`;
+
+            let agentsList = "";
             Object.keys(lastData.registry).forEach(idx => {
-                agents += '- [Agent ' + idx + ']: ' + (lastData.names[idx] || 'Agent') + ' (Primary Duty: ' + (lastData.duties[idx] || 'General Intelligence') + ')\\n';
+                agentsList += '- [Agent ' + idx + ']: ' + (lastData.names[idx] || 'Agent') + ' (Primary Duty: ' + (lastData.duties[idx] || 'General Intelligence') + ')\n';
             });
-            const text = '# ANTIGRAVITY ORCHESTRATION PROTOCOL\\n\\n' +
-                prompt + '\\n\\n' +
-                'You are an orchestrator with access to specialized sub-agents via the \'agbridge\' CLI. Each agent maintains a persistent, context-aware session.\\n\\n' +
-                '## AVAILABLE AGENTS:\\n' + agents + '\\n' +
-                '## CONTROL INTERFACE:\\n' +
-                '- Use \'agbridge <idx> "prompt"\' to delegate a task to a specific agent.\\n' +
-                '- Use \'agbridge <idx> "prompt" --all\' for strict supervision. This retrieves the COMPLETE execution path, including all intermediate thoughts and tool calls. WARNING: This may blow the context window; use only when full transparency of the agent\'s path is required.\\n\\n' +
-                '## GUIDELINES:\\n' +
-                '1. DELEGATE tasks based on the specific duties listed above.\\n' +
-                '2. PERSISTENCE is active; you do not need to re-explain context to an agent in the same session.';
 
-            navigator.clipboard.writeText(text).then(() => {
+            const finalPrompt = basePrompt.replace('{{agents}}', agentsList);
+
+            navigator.clipboard.writeText(finalPrompt).then(() => {
                 const btn = document.getElementById('copy-instr-btn');
                 btn.innerText = "✅ Protocol Copied!";
                 setTimeout(() => btn.innerText = "📋 Copy Delegation Prompt", 2000);
             });
         }
+
+        function renderCards(data) {
+            const list = document.getElementById('chat-list');
+            const allIndices = Object.keys(data.registry || {}).sort((a, b) => parseInt(a) - parseInt(b));
+
+            Array.from(list.children).forEach(child => {
+                const idx = child.getAttribute('data-idx');
+                if (!allIndices.includes(idx)) child.remove();
+            });
+
+            allIndices.forEach(idx => {
+                const id = data.registry[idx];
+                const name = data.names[idx] || 'unnamed';
+                const duty = data.duties[idx] || 'Define role...';
+                const agentWs = data.workspaces && data.workspaces[idx];
+                const isRelinking = (data.relinkMode == idx);
+                const isBusy = id && data.busyAgents && data.busyAgents[id];
+                const quotaVal = id && data.quotas && data.quotas[id];
+                const isExpired = !!quotaVal;
+                const quotaResetAt = (typeof quotaVal === 'string') ? quotaVal : null;
+                const modelName = id && data.models && data.models[id];
+                const modelLabel = modelName ? modelName.replace('MODEL_PLACEHOLDER_', '') : '';
+
+                const isGlobal = !agentWs;
+                const matchesWs = isGlobal || !data.currentWorkspace || agentWs === data.currentWorkspace;
+                if (currentWsFilter === 'current' && !matchesWs) {
+                    const existing = list.querySelector(`[data-idx="${idx}"]`);
+                    if (existing) existing.remove();
+                    return;
+                }
+
+                const lastPromptData = (id && data.lastPrompts && data.lastPrompts[id]) ? data.lastPrompts[id] : null;
+                const lastPromptText = lastPromptData ? (typeof lastPromptData === 'string' ? lastPromptData : lastPromptData.text) : 'No prompt recorded...';
+                const lastPromptTime = lastPromptData && lastPromptData.ts ? formatLastResponse(lastPromptData) : '';
+                const lastResponseData = (id && data.lastOutputs && data.lastOutputs[id]) ? data.lastOutputs[id] : null;
+                const lastResponseText = typeof lastResponseData === 'string' ? lastResponseData : (lastResponseData?.text || 'No activity recorded...');
+                const lastResponseTime = formatLastResponse(lastResponseData);
+
+                let item = list.querySelector(`[data-idx="${idx}"]`);
+                if (!item) {
+                    item = document.createElement('div');
+                    item.className = 'chat-card';
+                    item.setAttribute('data-idx', idx);
+                    list.appendChild(item);
+                }
+
+                item.className = 'chat-card' + (isRelinking ? ' relinking' : '') + (isBusy ? ' busy' : '') + (isExpired ? ' expired' : '');
+
+                const relinkAction = isRelinking ? 'cancelRelink' : 'relink';
+                const relinkImg = '<img src="${linkIconUri}" width="14" style="vertical-align: middle; opacity: 0.8;">';
+                const wsBasename = agentWs ? agentWs.split('/').pop() : null;
+                const taskExpanded = window.__expandedThoughts && window.__expandedThoughts[idx + '-task'];
+                const responseExpanded = window.__expandedThoughts && window.__expandedThoughts[idx + '-response'];
+
+                item.innerHTML = [
+                    '<button class="delete-btn" onclick="deleteAgent(\'' + idx + '\')" title="Delete Agent">×</button>',
+                    '<button class="relink-btn ' + (isRelinking ? 'active' : '') + '" onclick="' + relinkAction + '(\'' + idx + '\')" title="' + (isRelinking ? 'Cancel Relink' : 'Relink to current chat') + '">' + relinkImg + '</button>',
+                    '<button class="bind-btn" onclick="bindWorkspace(\'' + idx + '\')" title="' + (agentWs ? 'Bound to: ' + wsBasename + ' (click to rebind)' : 'Bind to a workspace') + '">◎</button>',
+                    '<div style="display: flex; align-items: center; margin-bottom: 5px; justify-content: space-between;">',
+                    '<div>',
+                    '<span class="index-badge ' + (isRelinking ? 'relinking' : '') + (isBusy ? ' busy' : '') + (isExpired ? ' expired' : '') + '" onclick="changeIndex(\'' + idx + '\')" title="Change Agent Index">Agent ' + idx + '</span>',
+                    '<span class="chat-name editable" onclick="rename(\'' + idx + '\')" title="Rename Agent">' + name + '</span>',
+                    (modelLabel ? '<span class="model-badge" title="Active Model: ' + modelName + '">' + modelLabel + '</span>' : ''),
+                    '</div>',
+                    '</div>',
+                    '<div class="chat-id">' + (id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED')) + '</div>',
+                    (isExpired ? '<div class="quota-badge" onclick="clearAgentQuota(\'' + idx + '\')" title="Click to clear quota exceeded state" style="cursor: pointer;">Quota Exceeded' + (quotaResetAt ? ' · resets ' + formatResetTime(quotaResetAt) : '') + ' [Clear]</div>' : ''),
+                    (wsBasename && currentWsFilter === 'all' ? '<div class="ws-tag">ws: ' + wsBasename + '</div>' : ''),
+                    '<div class="chat-duty editable" onclick="defineDuty(\'' + idx + '\')" title="Redefine Agent Role">' + duty + '</div>',
+                    '<div class="last-thought' + (taskExpanded ? ' expanded' : '') + '" onclick="toggleLastThought(\'' + idx + '\', \'task\')"><b>Last Task' + (lastPromptTime ? '<small style="opacity:0.5; font-weight:normal;">' + lastPromptTime + '</small>' : '') + '</b>' + lastPromptText + '</div>',
+                    '<div class="last-thought' + (responseExpanded ? ' expanded' : '') + '" onclick="toggleLastThought(\'' + idx + '\', \'response\')"><b>Last Response' + (lastResponseTime ? '<small style="opacity:0.5; font-weight:normal;">' + lastResponseTime + '</small>' : '') + '</b>' + lastResponseText + '</div>'
+                ].join('');
+            });
+        }
+
         window.addEventListener('message', event => {
             const { type, data } = event.data;
             if (type === 'status') {
@@ -514,44 +812,37 @@
                     document.getElementById('setting-cli-timeout').value = (data.settings.cliTimeout / 60) || 10;
                     document.getElementById('setting-timeout').value = (data.settings.timeout / 60) || 3;
                     document.getElementById('setting-log-heartbeat').checked = !!data.settings.logHeartbeat;
+                    document.getElementById('setting-port').value = data.settings.port || 9223;
+                    document.getElementById('setting-rdp-port').value = data.settings.rdpPort || 9222;
                 }
 
-                const list = document.getElementById('chat-list');
-                list.innerHTML = '';
-                
-                // Unified source: browserState now contains registry, names, duties
-                // But we should prioritize the registry as the key source
-                const allIndices = Object.keys(data.registry || {});
-                
-                allIndices.sort((a, b) => parseInt(a) - parseInt(b)).forEach(idx => {
-                    const id = data.registry[idx];
-                    const name = data.names[idx] || 'unnamed';
-                    const duty = data.duties[idx] || 'Define role...';
-                    const isRelinking = (data.relinkMode == idx);
-                    const isBusy = id && data.busyAgents && data.busyAgents[id];
-                    const lastPrompt = (id && data.lastPrompts && data.lastPrompts[id]) ? data.lastPrompts[id] : 'No prompt recorded...';
-                    const lastResponse = (id && data.lastOutputs && data.lastOutputs[id]) ? data.lastOutputs[id] : 'No activity recorded...';
+                const bridgeStatus = document.getElementById('bridge-status');
+                if (bridgeStatus) {
+                    const helpIcon = document.getElementById('status-help');
+                    const statusContainer = document.getElementById('status-container');
+                    if (!data.connected) {
+                        bridgeStatus.innerText = 'Offline';
+                        bridgeStatus.style.color = '#f44747';
+                        helpIcon.style.display = 'none';
+                        statusContainer.style.cursor = 'default';
+                        statusContainer.title = '';
+                    } else if (!data.tokenCaptured) {
+                        bridgeStatus.innerText = 'Prompt Once';
+                        bridgeStatus.style.color = '#f59e0b';
+                        helpIcon.style.display = 'inline-flex';
+                        helpIcon.style.color = '#f59e0b';
+                        statusContainer.style.cursor = 'help';
+                        statusContainer.title = 'Bridge connected. Please send one manual message in any Antigravity Chat to initialize context capture (required for secure session binding).';
+                    } else {
+                        bridgeStatus.innerText = 'Online';
+                        bridgeStatus.style.color = '#4ec9b0';
+                        helpIcon.style.display = 'none';
+                        statusContainer.style.cursor = 'default';
+                        statusContainer.title = '';
+                    }
+                }
 
-                    const relinkAction = isRelinking ? 'cancelRelink' : 'relink';
-
-                    const item = document.createElement('div');
-                    item.className = 'chat-card' + (isRelinking ? ' relinking' : '') + (isBusy ? ' busy' : '');
-
-                    item.innerHTML = [
-                        '<button class="delete-btn" onclick="deleteAgent(\'' + idx + '\')" title="Delete Agent">×</button>',
-                        '<button class="relink-btn ' + (isRelinking ? 'active' : '') + '" onclick="' + relinkAction + '(\'' + idx + '\')" title="' + (isRelinking ? 'Cancel Relink' : 'Relink to current chat') + '">🔗</button>',
-                        '<div style="display: flex; align-items: center; margin-bottom: 5px;">',
-                        '<span class="index-badge editable" onclick="changeIndex(\'' + idx + '\')" title="Change Agent Index">Agent ' + idx + '</span>',
-                        '<span class="chat-name editable" onclick="rename(\'' + idx + '\')" title="Rename Agent">' + name + '</span>',
-                        '</div>',
-                        '<div class="chat-id">' + (id || (isRelinking ? 'WAITING FOR NEW CHAT...' : 'UNLINKED')) + '</div>',
-                        '<div class="chat-duty editable" onclick="defineDuty(\'' + idx + '\')" title="Redefine Agent Role">' + duty + '</div>',
-                        '<div class="last-thought"><b>Last Task</b>' + lastPrompt + '</div>',
-                        '<div class="last-thought"><b>Last Agent Response</b>' + lastResponse + '</div>'
-                    ].join('');
-
-                    list.appendChild(item);
-                });
+                renderCards(data);
             }
         });
         setInterval(refresh, 2000);

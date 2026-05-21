@@ -2,8 +2,8 @@
   "name": "ag-bridge-extension",
   "displayName": "Antigravity Bridge",
   "description": "Automates bridge injection and communication with Antigravity",
-  "version": "1.9.8",
-  "icon": "icon.png",
+  "version": "1.1.2",
+  "icon": "assets/icon.png",
   "publisher": "infraviored",
   "repository": {
     "type": "git",
@@ -20,6 +20,24 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "antigravity-bridge",
+          "title": "AG Bridge",
+          "icon": "assets/agbridge_black.svg"
+        }
+      ]
+    },
+    "views": {
+      "antigravity-bridge": [
+        {
+          "type": "webview",
+          "id": "agBridgeDashboard",
+          "name": "Command Center"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "agbridge.inject",
@@ -47,6 +65,16 @@
           "type": "number",
           "default": 10,
           "description": "Total CLI timeout in MINUTES for the agbridge command (default: 10 minutes)."
+        },
+        "antigravity.bridge.port": {
+          "type": "integer",
+          "default": 9223,
+          "description": "The port on which the HTTP bridge server listens (default: 9223)."
+        },
+        "antigravity.bridge.rdpPort": {
+          "type": "integer",
+          "default": 9222,
+          "description": "The remote debugging port of the Antigravity IDE (default: 9222)."
         }
       }
     }

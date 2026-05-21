@@ -1,4 +1,6 @@
-// ANTIGRAVITY BRIDGE SCRIPT v26 — STATE-AWARE
+// 🚀 ANTIGRAVITY BRIDGE ORCHESTRATOR
+const VERSION = '1.1.2';
+
 const _origFetch = window.fetch;
 window.__origFetch = _origFetch;
 
@@ -19,20 +21,129 @@ function setBusyState(busy) {
     localStorage.setItem('__ag_busy', JSON.stringify(busy));
     window.__busyAgents = busy;
 }
+function getQuotas() {
+    try {
+        const q = JSON.parse(localStorage.getItem('__ag_quotas') || '{}');
+        const now = Date.now();
+        let changed = false;
+        for (const id in q) {
+            const val = q[id];
+            if (typeof val === 'string') {
+                const resetTime = new Date(val).getTime();
+                if (!isNaN(resetTime) && resetTime <= now) {
+                    delete q[id];
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            localStorage.setItem('__ag_quotas', JSON.stringify(q));
+            window.__agentQuotas = q;
+        }
+        return q;
+    } catch(e) { return {}; }
+}
+function setQuotas(q) {
+    localStorage.setItem('__ag_quotas', JSON.stringify(q));
+    window.__agentQuotas = q;
+}
+function markQuotaExpired(conversationId, resetAt) {
+    const q = getQuotas();
+    q[conversationId] = resetAt || true;
+    setQuotas(q);
+}
+function clearQuota(conversationId) {
+    const q = getQuotas();
+    if (q[conversationId]) { delete q[conversationId]; setQuotas(q); }
+}
+function extractQuotaReset(chunk) {
+    const m = chunk.match(/"quotaResetTimeStamp"\s*:\s*"([^"]+)"/);
+    return m ? m[1] : null;
+}
+function getModels() {
+    try { return JSON.parse(localStorage.getItem('__ag_models') || '{}'); } catch(e) { return {}; }
+}
+function setModels(m) {
+    localStorage.setItem('__ag_models', JSON.stringify(m));
+    window.__agentModels = m;
+}
+function updateModel(conversationId, modelName) {
+    if (!conversationId || !modelName) return;
+    const m = getModels();
+    if (m[conversationId] !== modelName) {
+        m[conversationId] = modelName;
+        setModels(m);
+        log(`🤖 Model detected for ${conversationId.slice(0,8)}: ${modelName}`, 'success');
+    }
+}
+function extractModelName(chunk) {
+    const m = chunk.match(/"modelName"\s*:\s*"([^"]+)"/) || chunk.match(/"generatorModel"\s*:\s*"([^"]+)"/);
+    return m ? m[1] : null;
+}
 
+window.__agId = Math.random().toString(36).substring(7);
 window.__agLogs = window.__agLogs || [];
 window.__agReadLog = window.__agReadLog || [];
 window.__chatRegistry = getRegistry();
+window.__agentQuotas = getQuotas();
+window.__agentModels = getModels();
 window.__chatNames = JSON.parse(localStorage.getItem('__ag_names') || '{}');
-window.__busyAgents = getBusyState();
+
+// ── STARTUP SANITIZER (Only clear VERY old ghosts, e.g. > 30 mins) ──
+function sanitizeBusyState() {
+    const busy = getBusyState();
+    const now = Date.now();
+    for (const id in busy) {
+        if (!busy[id].startTime || (now - busy[id].startTime > 30 * 60 * 1000)) {
+            delete busy[id];
+        }
+    }
+    setBusyState(busy); // Always set it so window.__busyAgents is initialized
+}
+sanitizeBusyState();
+
+// Clear stale command mailboxes
+localStorage.removeItem('__cmd');
+for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('__ag_cmd_')) localStorage.removeItem(key);
+}
+
 window.__activeReaders = {};
 window.__activeStreamCount = 0;
 window.__cmdActive = false;
-window.__lastOutputs = window.__lastOutputs || {};
-window.__lastPrompts = window.__lastPrompts || {};
+try {
+    window.__lastOutputs = JSON.parse(localStorage.getItem('__ag_last_outputs') || '{}');
+} catch (e) {
+    window.__lastOutputs = {};
+}
+try {
+    window.__lastPrompts = JSON.parse(localStorage.getItem('__ag_last_prompts') || '{}');
+} catch (e) {
+    window.__lastPrompts = {};
+}
+
+window.__activeTrajectories = window.__activeTrajectories || {};
 window.__agLogHeartbeat = localStorage.getItem('__ag_log_heartbeat') === 'true';
 window.__agCliTimeout = parseInt(localStorage.getItem('__ag_cli_timeout') || '600000');
 window.__agTimeout = parseInt(localStorage.getItem('__ag_timeout') || '180000');
+
+// ── GARBAGE COLLECTOR (Response TTL Sweeper) ──────────────────
+setInterval(() => {
+    let count = 0;
+    const now = Date.now();
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('__res_')) {
+            // Sweep everything. In production we'd check timestamps, 
+            // but since agbridge is sync, any __res_ in localStorage 
+            // that isn't picked up in 60s is junk.
+            localStorage.removeItem(key);
+            count++;
+        }
+    }
+    if (count > 0 && window.__agVerbose) log(`🧹 GC: Purged ${count} stale responses.`, 'debug');
+}, 60000);
 
 // ── VERBOSE LOGGING ─────────────────────────────────────────
 function log(msg, level = 'info') {
@@ -49,7 +160,7 @@ function log(msg, level = 'info') {
     console.log(`%c${entry.msg}`, styles[level] || styles.info);
 }
 
-console.log('%c🚀 Bridge v26 loaded — STATE-AWARE ORCHESTRATION', 'color:magenta; font-weight:bold; font-size:14px');
+console.log(`%c🚀 Bridge v${VERSION} loaded — TRUE PARALLELISM`, 'color:magenta; font-weight:bold; font-size:14px');
 
 // ── KEYBOARD SHORTCUTS ──────────────────────────────────────
 window.addEventListener('keydown', (e) => {
@@ -98,7 +209,12 @@ window.fetch = async function(...args) {
                         activeConversationId = m[1];
                         const reg = getRegistry();
                         const existingValues = Object.values(reg);
-                        if (!existingValues.includes(activeConversationId)) {
+                        
+                        // 🛡️ IGNORE DEVELOPER CHAT: Don't register the conversation we are currently using for orchestration
+                        const developerConvId = window.__agCaptured?.bodyTemplate?.conversationId;
+                        if (activeConversationId === developerConvId) {
+                            // Skip discovery for self
+                        } else if (!existingValues.includes(activeConversationId)) {
                             // 🆕 Discovery Logic: Prioritize Relink Mode
                             let targetIdx = window.__relinkMode;
                             if (targetIdx) {
@@ -117,13 +233,20 @@ window.fetch = async function(...args) {
                         }
                     }
 
+                    const modelName = extractModelName(chunk);
+                    if (modelName && activeConversationId) {
+                        updateModel(activeConversationId, modelName);
+                        clearQuota(activeConversationId);
+                    }
+
                     // Instant peek for the user
                     if (chunk.includes('modifiedResponse')) {
                         const text = chunk.match(/"modifiedResponse":"((?:[^"\\]|\\.)*)"/)?.[1];
                         if (text && activeConversationId) {
                             const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                             const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
-                            window.__lastOutputs[activeConversationId] = snippet;
+                            window.__lastOutputs[activeConversationId] = { text: snippet, ts: Date.now() };
+                            localStorage.setItem('__ag_last_outputs', JSON.stringify(window.__lastOutputs));
                         }
                     }
 
@@ -132,8 +255,22 @@ window.fetch = async function(...args) {
                         if (text && activeConversationId) {
                             const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                             const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
-                            window.__lastPrompts[activeConversationId] = snippet;
+                            window.__lastPrompts[activeConversationId] = { text: snippet, ts: Date.now() };
+                            localStorage.setItem('__ag_last_prompts', JSON.stringify(window.__lastPrompts));
                         }
+                    }
+
+                    if (activeConversationId && chunk.includes('"terminationReason"')) {
+                        if (chunk.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
+                            markQuotaExpired(activeConversationId, extractQuotaReset(chunk));
+                            log(`💰 [PASSIVE] Quota (terminationReason) for ${activeConversationId.slice(0,8)}`, 'warn');
+                        } else if (chunk.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
+                            clearQuota(activeConversationId);
+                        }
+                    }
+                    if (activeConversationId && chunk.includes('"CORTEX_STEP_TYPE_ERROR_MESSAGE"') && chunk.includes('"errorCode":429')) {
+                        markQuotaExpired(activeConversationId, extractQuotaReset(chunk));
+                        log(`💰 [PASSIVE] Quota (429 step) for ${activeConversationId.slice(0,8)} | reset: ${extractQuotaReset(chunk) || 'unknown'}`, 'warn');
                     }
                 }
             } catch (e) { 
@@ -159,6 +296,11 @@ window.fetch = async function(...args) {
                     bodyTemplate: parsed
                 };
                 log(`📡 [CAPTURE] Endpoint Secured. CSRF: ${headers['x-codeium-csrf-token']?.slice(0,8)}...`, 'success');
+                if (parsed.cascadeId && parsed.items?.[0]?.text) {
+                    const promptText = parsed.items[0].text;
+                    window.__lastPrompts[parsed.cascadeId] = { text: promptText.length > 400 ? '...' + promptText.slice(-400) : promptText, ts: Date.now() };
+                    localStorage.setItem('__ag_last_prompts', JSON.stringify(window.__lastPrompts));
+                }
             } catch (e) {
                 log(`📡 [CAPTURE ERROR] Failed to parse body: ${e.message}`, 'error');
             }
@@ -222,17 +364,36 @@ window.activateStream = async function(conversationId) {
                     const chunk = decoder.decode(value, { stream: true });
                     window.__agReadLog.push({ ts: Date.now(), source: 'proactive', conversationId, payload: chunk });
                     
+                    const modelName = extractModelName(chunk);
+                    if (modelName) {
+                        updateModel(conversationId, modelName);
+                        clearQuota(conversationId);
+                    }
+
                     // Dashboard updates for background agents
                     if (chunk.includes('modifiedResponse')) {
                         const text = chunk.match(/"modifiedResponse":"((?:[^"\\]|\\.)*)"/)?.[1];
                         if (text) {
                             const clean = text.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
                             const snippet = clean.length > 400 ? '...' + clean.slice(-400) : clean;
-                            window.__lastOutputs[conversationId] = snippet;
+                            window.__lastOutputs[conversationId] = { text: snippet, ts: Date.now() };
+                            localStorage.setItem('__ag_last_outputs', JSON.stringify(window.__lastOutputs));
                         }
                     }
 
-                    // Trace logs for debugging
+                    if (chunk.includes('"terminationReason"')) {
+                        if (chunk.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
+                            markQuotaExpired(conversationId, extractQuotaReset(chunk));
+                            log(`💰 [PROACTIVE] Quota (terminationReason) for ${conversationId.slice(0,8)}`, 'warn');
+                        } else if (chunk.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
+                            clearQuota(conversationId);
+                        }
+                    }
+                    if (chunk.includes('"CORTEX_STEP_TYPE_ERROR_MESSAGE"') && chunk.includes('"errorCode":429')) {
+                        markQuotaExpired(conversationId, extractQuotaReset(chunk));
+                        log(`💰 [PROACTIVE] Quota (429 step) for ${conversationId.slice(0,8)} | reset: ${extractQuotaReset(chunk) || 'unknown'}`, 'warn');
+                    }
+
                     if (window.__agVerbose) {
                         log(`📥 [PROACTIVE] Chunk received (${chunk.length} bytes)`, 'debug');
                     }
@@ -272,24 +433,53 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
         throw new Error(`Agent not discovered yet. Please focus the chat for ${cascadeId} briefly or wait for auto-discovery.`);
     }
 
+    const quotas = getQuotas();
+    if (quotas[conversationId]) {
+        const qVal = quotas[conversationId];
+        let resetStr = typeof qVal === 'string' ? qVal : 'unknown';
+        if (resetStr !== 'unknown') {
+            try {
+                const diffMs = new Date(resetStr).getTime() - Date.now();
+                if (diffMs > 0) {
+                    const diffSec = Math.ceil(diffMs / 1000);
+                    resetStr = `${resetStr} (in ${diffSec}s)`;
+                }
+            } catch(e) {}
+        }
+        throw new Error(`AGENT ${chatIdx} QUOTA EXCEEDED (Resets at ${resetStr}). Clear in dashboard or wait for reset.`);
+    }
+
     if (window.__busyAgents[conversationId]) {
+        const busyInfo = window.__busyAgents[conversationId];
         const last = window.__lastOutputs[conversationId] || "Thinking...";
-        throw new Error(`AGENT ${chatIdx} STILL WORKING. LAST OUTPUT: ${last}`);
+        throw new Error(`AGENT ${chatIdx} STILL WORKING (Window: ${busyInfo.windowId}). LAST OUTPUT: ${last}`);
     }
 
     const busy = getBusyState();
-    busy[conversationId] = true;
+    busy[conversationId] = { status: 'RUNNING', windowId: window.__agId, startTime: Date.now() };
     setBusyState(busy);
 
-    window.__lastPrompts[conversationId] = (prompt.length > 400) ? '...' + prompt.slice(-400) : prompt;
+    window.__lastPrompts[conversationId] = { text: (prompt.length > 400) ? '...' + prompt.slice(-400) : prompt, ts: Date.now() };
+    localStorage.setItem('__ag_last_prompts', JSON.stringify(window.__lastPrompts));
+
+    // 💰 CLEAR QUOTA on new start
+    const qStart = getQuotas();
+    if (qStart[conversationId]) {
+        delete qStart[conversationId];
+        setQuotas(qStart);
+    }
 
     // PROACTIVE WAKEUP
     await window.activateStream(conversationId).catch(e => log(`⚠️ Stream wakeup failed: ${e.message}`, 'warn'));
 
+    // DELAY & PURGE: Wait 1.5s for history replay burst to arrive before purging
+    log(`⏳ Absorbing history replay...`, 'debug');
+    await new Promise(r => setTimeout(r, 1500));
+
     log(`🧹 Purging old chunks for cascade ${cascadeId.slice(0,8)}...`);
     window.__agReadLog = window.__agReadLog.filter(x => !x.payload?.includes(cascadeId));
 
-    log(`🚀 DISPATCH (Agent ${chatIdx}): "${prompt.slice(0,40)}..."`, 'info');
+    log(`🚀 DISPATCH [ID: ${cascadeId.slice(0,8)}] (Agent ${chatIdx}): "${prompt.slice(0,40)}..."`, 'info');
     const payload = { ...c.bodyTemplate, cascadeId, items: [{ text: prompt }], sentAt: new Date().toISOString() };
     
     const res = await _origFetch(c.url, {
@@ -300,33 +490,76 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
 
     if (!res.ok) throw new Error(`POST Failed: ${res.status}`);
 
+    // DETERMINISTIC TRAJECTORY FILTERING: Extract the unique ID for this specific turn
+    let activeTrajectoryId = null;
+    try {
+        const clonedRes = res.clone();
+        const json = await clonedRes.json();
+        
+        // 🚨 PERMANENT TRAP FOR SERVER JSON
+        log(`🚨 POST RESPONSE JSON CAPTURED:`, 'magenta');
+        console.log(json);
+        
+        activeTrajectoryId = json.update?.trajectoryId;
+        if (activeTrajectoryId) {
+            window.__activeTrajectories[conversationId] = activeTrajectoryId;
+            log(`🎯 SESSION KEY: ${activeTrajectoryId.slice(0,8)} (Trajectory Filter Active)`, 'debug');
+        }
+    } catch(e) {
+        log(`⚠️ Failed to parse trajectoryId: ${e.message}`, 'warn');
+    }
+
     const sentAt = Date.now();
     log(`📬 POST OK. Watching (sentAt=${sentAt}, patience=${window.__agTimeout}ms)...`, 'info');
 
     let lastRunningTs = 0, lastIdleTs = 0, lastChunkTs = 0;
     let isFastExit = false;
-    const globalTimeoutMs = window.__agCliTimeout || 600000; // Match CLI or 10m fallback
+    const globalTimeoutMs = window.__agCliTimeout || 600000;
     const SILENCE_MS = window.__agTimeout;
 
     return new Promise((resolve, reject) => {
         const iv = setInterval(() => {
             const now = Date.now();
-            const allRelevant = window.__agReadLog.filter(x => x.ts >= sentAt && x.payload?.includes(cascadeId));
+            
+            // 🛡️ TRAJECTORY FILTER: Deterministically ignore all history/replay/other chunks
+            const allRelevant = window.__agReadLog.filter(x => {
+                if (x.ts < sentAt) return false;
+                if (!x.payload?.includes(cascadeId)) return false;
+                if (activeTrajectoryId && !x.payload?.includes(activeTrajectoryId)) return false;
+                return true;
+            });
             
             // 🛡️ REPLAY PROTECTION: If we have proactive data, ignore passive (which may be history replay)
             const proactive = allRelevant.filter(x => x.source === 'proactive');
             const relevant = proactive.length > 0 ? proactive : allRelevant;
 
             for (const ch of relevant) {
+                // 🛡️ REPLAY POLLUTION GUARD: Peek for internal timestamp
+                const internalTsStr = ch.payload.match(/"sentAt"\s*:\s*"([^"]+)"/)?.[1];
+                const internalTs = internalTsStr ? new Date(internalTsStr).getTime() : 0;
+                
+                // If the chunk is internally dated BEFORE our POST (with 5s buffer), it's a replay.
+                if (internalTs > 0 && internalTs < sentAt - 5000) {
+                    continue; 
+                }
+
                 lastChunkTs = Math.max(lastChunkTs, ch.ts);
                 if (ch.payload.includes('"CASCADE_RUN_STATUS_RUNNING"')) lastRunningTs = ch.ts;
                 if (ch.payload.includes('"CASCADE_RUN_STATUS_IDLE"'))    lastIdleTs = ch.ts;
                 
                 // ⚡ FAST-EXIT SIGNAL DETECTION (Strictly trust proactive if available)
                 const canTrust = proactive.length > 0 ? (ch.source === 'proactive') : true;
-                if (canTrust && (ch.payload.includes('"terminationReason"') || ch.payload.includes('"artifactSnapshotsUpdate"'))) {
+                if (canTrust && ch.payload.includes('"terminationReason"')) {
+                    
+                    // 💰 QUOTA DETECTION
+                    if (ch.payload.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
+                        markQuotaExpired(conversationId, extractQuotaReset(ch.payload));
+                    } else if (ch.payload.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
+                        clearQuota(conversationId);
+                    }
+
                     if (!isFastExit) {
-                        log(`⚡ FAST-EXIT: Termination signal detected (${ch.source})! Resolving...`, 'success');
+                        log(`⚡ FAST-EXIT: Termination signal detected! (Source: ${ch.source}, InternalTs: ${internalTsStr || 'unknown'})`, 'success');
                         isFastExit = true;
                     }
                 }
@@ -344,6 +577,28 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
 
             if (canResolve) {
                 clearInterval(iv);
+
+                // 🧟 GHOST WORK MONITOR: Audit if the agent continues working after "terminationReason"
+                if (isFastExit) {
+                    const exitTs = Date.now();
+                    const ghostIv = setInterval(() => {
+                        const now = Date.now();
+                        if (now - exitTs > 30000) { clearInterval(ghostIv); return; }
+                        
+                        const leaked = window.__agReadLog.filter(x => 
+                            x.ts > exitTs && !x.__reported &&
+                            x.payload?.includes(cascadeId) && 
+                            (activeTrajectoryId ? x.payload?.includes(activeTrajectoryId) : true) &&
+                            x.payload?.includes('"modifiedResponse"')
+                        );
+                        
+                        if (leaked.length > 0) {
+                            log(`🚨 GHOST WORK DETECTED! Agent ${chatIdx} sent ${leaked.length} chunks AFTER termination signal.`, 'error');
+                            leaked.forEach(x => x.__reported = true);
+                        }
+                    }, 1000);
+                }
+
                 const fullText = relevant.map(x => x.payload).join('');
                 const matches = [...fullText.matchAll(/"(?:modifiedResponse|text)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)];
                 const raw = matches.map(m => m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
@@ -358,6 +613,14 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
                 }
 
                 const steps = raw.filter((r, i) => !raw.some((other, j) => j > i && other.startsWith(r) && other.length > r.length));
+                
+                // 💰 QUOTA DETECTION: If error reason is found and we have no real response, it's a quota wall.
+                if (fullText.includes('"EXECUTOR_TERMINATION_REASON_ERROR"') && steps.length < 2) {
+                    log(`✅ RESOLVED: QUOTA EXCEEDED signal captured.`, 'success');
+                    resolve("QUOTA EXCEEDED");
+                    return;
+                }
+
                 const finalAnswer = allSteps ? steps.join('\n\n---\n\n') : (steps.at(-1) || '');
                 log(`✅ RESOLVED: ${steps.length} steps captured.`, 'success');
                 resolve(finalAnswer);
@@ -372,37 +635,75 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
         }, 500);
     }).finally(() => {
         const busy = getBusyState();
-        busy[conversationId] = false;
+        delete busy[conversationId];
         setBusyState(busy);
     });
 };
 
-// ── COMMAND DISPATCHER ──────────────────────────────────────
+// ── COMMAND DISPATCHER (Parallel Scanner) ──────────────────
 (function startCommandDispatcher() {
     log('📡 Dispatcher standing by.', 'info');
     setInterval(() => {
-        const raw = localStorage.getItem('__cmd');
-        if (!raw || window.__cmdActive) return;
-        localStorage.removeItem('__cmd');
-        window.__cmdActive = true;
-        const cmd = JSON.parse(raw);
-        const { chatIndex, text, reqId, opts } = cmd;
-        const cascadeId = window.__chatRegistry[chatIndex];
-        if (!cascadeId) {
-            localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer: `ERROR: No chat ${chatIndex}` }));
-            window.__cmdActive = false;
+        // Scan for all pending unique command mailboxes
+        const keys = Object.keys(localStorage).filter(k => k.startsWith('__ag_cmd_'));
+        if (keys.length === 0) {
+            const legacy = localStorage.getItem('__cmd');
+            if (legacy) {
+                localStorage.removeItem('__cmd');
+                processCommand(legacy);
+            }
             return;
         }
-        window.postAndReadAuto(text, cascadeId, opts?.all || false)
-            .then(answer => {
-                localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer }));
-                window.__cmdActive = false;
-            })
-            .catch(err => {
-                localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer: `ERROR: ${err.message}` }));
-                window.__cmdActive = false;
-            });
-    }, 300);
+
+        keys.forEach(targetKey => {
+            const raw = localStorage.getItem(targetKey);
+            if (!raw) return;
+
+            try {
+                const cmd = JSON.parse(raw);
+                const cascadeId = window.__chatRegistry[cmd.chatIndex];
+                
+                // PARALLEL GUARD: Only pick up if the target agent isn't already busy
+                if (cascadeId && !window.__busyAgents[cascadeId]) {
+                    localStorage.removeItem(targetKey); // Acknowledge
+                    processCommand(raw);
+                }
+            } catch (e) {
+                log(`❌ Dispatcher crashed while reading command: ${e.message}`, 'error');
+                try {
+                    const reqIdMatch = raw.match(/"reqId"\s*:\s*"([^"]+)"/);
+                    if (reqIdMatch) {
+                        localStorage.setItem(`__res_${reqIdMatch[1]}`, JSON.stringify({ answer: `BRIDGE CRASH: ${e.message}` }));
+                    }
+                } catch(e2) {}
+                localStorage.removeItem(targetKey);
+            }
+        });
+    }, 400);
+
+    function processCommand(raw) {
+        try {
+            const cmd = JSON.parse(raw);
+            const { chatIndex, text, reqId, opts } = cmd;
+            const cascadeId = window.__chatRegistry[chatIndex];
+            
+            if (window.__agVerbose) log(`📩 Received command [${reqId}] for Agent ${chatIndex}`, 'debug');
+
+            if (!cascadeId) {
+                localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer: `ERROR: No chat ${chatIndex}` }));
+                return;
+            }
+            window.postAndReadAuto(text, cascadeId, opts?.all || false)
+                .then(answer => {
+                    localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer }));
+                })
+                .catch(err => {
+                    localStorage.setItem(`__res_${reqId}`, JSON.stringify({ answer: `ERROR: ${err.message}` }));
+                });
+        } catch (e) {
+            log(`❌ Dispatch Error: ${e.message}`, 'error');
+        }
+    }
 })();
 
 // ── DIAGNOSTIC TOOL ─────────────────────────────────────────

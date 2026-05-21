@@ -45,7 +45,6 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const os = __importStar(require("os"));
 let statusBarItem;
-let dashboardPanel;
 let outputChannel;
 let bridgeActive = false;
 let relinkInProgress = null;
@@ -54,6 +53,7 @@ let lastLogIndex = 0;
 let isPolling = false;
 let lastHeartbeat = 0;
 let globalExtensionPath;
+let bridgeServer = null;
 var BridgeState;
 (function (BridgeState) {
     BridgeState[BridgeState["MissingRDP"] = 0] = "MissingRDP";
@@ -77,14 +77,14 @@ function loadConfig() {
             const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
             return {
                 agents: config.agents || {},
-                settings: config.settings || { cliTimeout: 600, timeout: 180, logHeartbeat: false }
+                settings: config.settings || { cliTimeout: 600, timeout: 180, logHeartbeat: false, rdpPort: 9222 }
             };
         }
         catch (e) {
             logToChannel(`Error loading config: ${e}`);
         }
     }
-    return { agents: {}, settings: { cliTimeout: 600, timeout: 180, logHeartbeat: false } };
+    return { agents: {}, settings: { cliTimeout: 600, timeout: 180, logHeartbeat: false, rdpPort: 9222 } };
 }
 function saveConfig(config) {
     const configPath = getConfigPath();
@@ -96,28 +96,51 @@ function saveConfig(config) {
 // Global CLI Command Setup
 function setupGlobalCommand(extensionPath) {
     try {
-        const binDir = path.join(process.env.HOME || '', '.local', 'bin');
-        if (!fs.existsSync(binDir))
-            fs.mkdirSync(binDir, { recursive: true });
+        // Try multiple standard local bin directories
+        const home = process.env.HOME || '';
+        const candidateDirs = [
+            path.join(home, '.local', 'bin'),
+            path.join(home, 'bin'),
+            path.join(home, '.cargo', 'bin')
+        ];
+        let successDir = '';
         const scriptPath = path.join(extensionPath, 'send.mjs');
-        const linkPath = path.join(binDir, 'agbridge');
         if (fs.existsSync(scriptPath))
             fs.chmodSync(scriptPath, '755');
-        if (fs.existsSync(linkPath)) {
+        for (const binDir of candidateDirs) {
             try {
-                const existing = fs.readlinkSync(linkPath);
-                if (existing !== scriptPath) {
-                    fs.unlinkSync(linkPath);
+                if (!fs.existsSync(binDir))
+                    fs.mkdirSync(binDir, { recursive: true });
+                const linkPath = path.join(binDir, 'agbridge');
+                if (fs.existsSync(linkPath)) {
+                    try {
+                        const existing = fs.readlinkSync(linkPath);
+                        if (existing !== scriptPath) {
+                            fs.unlinkSync(linkPath);
+                            fs.symlinkSync(scriptPath, linkPath);
+                        }
+                    }
+                    catch (e) {
+                        fs.unlinkSync(linkPath);
+                        fs.symlinkSync(scriptPath, linkPath);
+                    }
+                }
+                else {
                     fs.symlinkSync(scriptPath, linkPath);
                 }
+                successDir = binDir;
+                break; // Stop at first successful setup
             }
             catch (e) {
-                fs.unlinkSync(linkPath);
-                fs.symlinkSync(scriptPath, linkPath);
+                // Try next directory if this one is not writable
+                continue;
             }
         }
+        if (successDir) {
+            logToChannel(`✨ agbridge CLI linked to ${successDir}`);
+        }
         else {
-            fs.symlinkSync(scriptPath, linkPath);
+            logToChannel(`[ERROR] Global command setup failed: Could not write to any local bin directory.`);
         }
     }
     catch (e) {
@@ -126,7 +149,8 @@ function setupGlobalCommand(extensionPath) {
 }
 async function getAntigravityTab() {
     return new Promise((resolve, reject) => {
-        http.get('http://localhost:9222/json', (res) => {
+        const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get('rdpPort', 9222);
+        http.get(`http://localhost:${rdpPort}/json`, (res) => {
             let data = '';
             res.on('data', (chunk) => data += chunk);
             res.on('end', () => {
@@ -180,7 +204,20 @@ async function injectBridge() {
                 params: { expression: script + "\n" + syncScript }
             }));
         });
+        if (bridgeServer) {
+            try {
+                bridgeServer.close();
+            }
+            catch (e) {
+                // Ignore close errors
+            }
+            bridgeServer = null;
+        }
         const server = http.createServer();
+        bridgeServer = server;
+        server.on('error', (err) => {
+            logToChannel(`[ERROR] Bridge server failed to start: ${err.message}`);
+        });
         server.on('request', async (req, res) => {
             const url = new URL(req.url || '/', `http://${req.headers.host}`);
             if (url.pathname === '/cmd') {
@@ -211,7 +248,14 @@ async function injectBridge() {
                 }
             }
         });
-        server.listen(9223);
+        const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get('rdpPort', 9222);
+        let port = vscode.workspace.getConfiguration('antigravity.bridge').get('port', 9223);
+        if (port === rdpPort) {
+            port = rdpPort + 1;
+            logToChannel(`[WARNING] Port conflict detected: Bridge Port is identical to RDP Port (${rdpPort}). Automatically shifting Bridge Port to ${port} to avoid conflict.`);
+        }
+        server.listen(port);
+        logToChannel(`✨ Bridge server listening on port ${port}`);
         ws.on('message', (data) => {
             const msg = JSON.parse(data.toString());
             if (msg.id === 1) {
@@ -239,8 +283,9 @@ function updateStatusBar(state) {
     statusBarItem.backgroundColor = undefined;
     switch (state) {
         case BridgeState.MissingRDP:
+            const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get('rdpPort', 9222);
             statusBarItem.text = '$(error) AG-Bridge: Missing RDP';
-            statusBarItem.tooltip = 'Antigravity must be launched with --remote-debugging-port=9222. Please restart the IDE with debugging enabled.';
+            statusBarItem.tooltip = `Antigravity must be launched with --remote-debugging-port=${rdpPort}. Please restart the IDE with debugging enabled.`;
             statusBarItem.command = 'agbridge.inject'; // Allow retry
             break;
         case BridgeState.PromptOnce:
@@ -255,164 +300,252 @@ function updateStatusBar(state) {
     }
 }
 async function showDashboard() {
-    if (dashboardPanel) {
-        dashboardPanel.reveal(vscode.ViewColumn.Beside);
-        return;
+    await vscode.commands.executeCommand('workbench.view.extension.antigravity-bridge');
+}
+class DashboardViewProvider {
+    _extensionPath;
+    static viewType = 'agBridgeDashboard';
+    _view;
+    constructor(_extensionPath) {
+        this._extensionPath = _extensionPath;
     }
-    dashboardPanel = vscode.window.createWebviewPanel('agDashboard', 'Antigravity Bridge Status', vscode.ViewColumn.Beside, {
-        enableScripts: true,
-        localResourceRoots: [vscode.Uri.file(globalExtensionPath)]
-    });
-    dashboardPanel.onDidDispose(() => dashboardPanel = undefined);
-    dashboardPanel.webview.onDidReceiveMessage(async (message) => {
-        switch (message.command) {
-            case 'changeIndex':
-                const newIdx = await vscode.window.showInputBox({ prompt: `New Index for Agent ${message.idx}`, value: message.idx });
-                if (newIdx && newIdx !== message.idx) {
-                    const config = loadConfig();
-                    if (config.agents[newIdx]) {
-                        vscode.window.showErrorMessage(`Index ${newIdx} is already in use!`);
-                        return;
+    resolveWebviewView(webviewView, context, _token) {
+        this._view = webviewView;
+        webviewView.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [vscode.Uri.file(this._extensionPath)]
+        };
+        webviewView.webview.html = getDashboardHtml(webviewView.webview, this._extensionPath);
+        webviewView.webview.onDidReceiveMessage(async (message) => {
+            switch (message.command) {
+                case 'changeIndex':
+                    const newIdx = await vscode.window.showInputBox({ prompt: `New Index for Agent ${message.idx}`, value: message.idx });
+                    if (newIdx && newIdx !== message.idx) {
+                        const config = loadConfig();
+                        if (config.agents[newIdx]) {
+                            vscode.window.showErrorMessage(`Index ${newIdx} is already in use!`);
+                            return;
+                        }
+                        config.agents[newIdx] = config.agents[message.idx];
+                        delete config.agents[message.idx];
+                        saveConfig(config);
+                        const tab = await getAntigravityTab();
+                        if (tab) {
+                            const ws = new ws_1.default(tab.webSocketDebuggerUrl);
+                            ws.on('open', () => {
+                                ws.send(JSON.stringify({ id: 107, method: 'Runtime.evaluate', params: { expression: `
+                                    window.__chatRegistry[${newIdx}] = window.__chatRegistry[${message.idx}];
+                                    window.__chatNames[${newIdx}] = window.__chatNames[${message.idx}];
+                                    delete window.__chatRegistry[${message.idx}];
+                                    delete window.__chatNames[${message.idx}];
+                                    if(window.__relinkMode == ${message.idx}) window.__relinkMode = ${newIdx};
+                                ` } }));
+                                ws.on('message', () => ws.close());
+                            });
+                        }
                     }
-                    config.agents[newIdx] = config.agents[message.idx];
-                    delete config.agents[message.idx];
+                    break;
+                case 'rename':
+                    await renameChat(message.idx);
+                    break;
+                case 'defineDuty':
+                    await defineDuty(message.idx);
+                    break;
+                case 'resetAll':
+                    await resetAll();
+                    break;
+                case 'relink':
+                    await relink(message.idx);
+                    break;
+                case 'cancelRelink':
+                    await cancelRelink(message.idx);
+                    break;
+                case 'deleteAgent':
+                    await deleteAgent(message.idx);
+                    break;
+                case 'refresh':
+                    this.update();
+                    break;
+                case 'clearQuota':
+                    const clearConfig = loadConfig();
+                    const clearAgent = clearConfig.agents[message.idx];
+                    if (clearAgent && clearAgent.id) {
+                        const tab = await getAntigravityTab();
+                        if (tab) {
+                            const ws = new ws_1.default(tab.webSocketDebuggerUrl);
+                            ws.on('open', () => {
+                                ws.send(JSON.stringify({ id: 108, method: 'Runtime.evaluate', params: { expression: `clearQuota("${clearAgent.id}");` } }));
+                                ws.on('message', () => ws.close());
+                            });
+                        }
+                    }
+                    break;
+                case 'bindWorkspace':
+                    const bindConfig = loadConfig();
+                    const currentWs = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                    const wsName = vscode.workspace.workspaceFolders?.[0]?.name || 'Unknown';
+                    const choice = await vscode.window.showQuickPick([
+                        { label: `Bind to current workspace: ${wsName}`, value: currentWs },
+                        { label: 'Make global (no workspace binding)', value: '' }
+                    ], { placeHolder: `Workspace binding for Agent ${message.idx}` });
+                    if (choice !== undefined) {
+                        if (!bindConfig.agents[message.idx])
+                            bindConfig.agents[message.idx] = { id: '', name: '', duty: '' };
+                        if (choice.value) {
+                            bindConfig.agents[message.idx].workspace = choice.value;
+                        }
+                        else {
+                            delete bindConfig.agents[message.idx].workspace;
+                        }
+                        saveConfig(bindConfig);
+                    }
+                    break;
+                case 'saveSettings':
+                    const config = loadConfig();
+                    config.settings.cliTimeout = message.settings.cliTimeout;
+                    config.settings.timeout = message.settings.timeout;
+                    config.settings.logHeartbeat = message.settings.logHeartbeat;
+                    config.settings.rdpPort = message.settings.rdpPort || 9222;
                     saveConfig(config);
-                    // Push to browser
+                    const newRdpPort = message.settings.rdpPort;
+                    if (newRdpPort && typeof newRdpPort === 'number') {
+                        await vscode.workspace.getConfiguration('antigravity.bridge').update('rdpPort', newRdpPort, vscode.ConfigurationTarget.Global);
+                    }
+                    const newPort = message.settings.port;
+                    const oldPort = vscode.workspace.getConfiguration('antigravity.bridge').get('port', 9223);
+                    if (newPort && typeof newPort === 'number' && newPort !== oldPort) {
+                        await vscode.workspace.getConfiguration('antigravity.bridge').update('port', newPort, vscode.ConfigurationTarget.Global);
+                        injectBridge().catch(() => { });
+                    }
                     const tab = await getAntigravityTab();
                     if (tab) {
-                        const ws = new ws_1.default(tab.webSocketDebuggerUrl);
-                        ws.on('open', () => {
-                            ws.send(JSON.stringify({ id: 107, method: 'Runtime.evaluate', params: { expression: `
-                                        window.__chatRegistry[${newIdx}] = window.__chatRegistry[${message.idx}];
-                                        window.__chatNames[${newIdx}] = window.__chatNames[${message.idx}];
-                                        delete window.__chatRegistry[${message.idx}];
-                                        delete window.__chatNames[${message.idx}];
-                                        if(window.__relinkMode == ${message.idx}) window.__relinkMode = ${newIdx};
-                                    ` } }));
-                            ws.on('message', () => ws.close());
+                        const ws2 = new ws_1.default(tab.webSocketDebuggerUrl);
+                        ws2.on('open', () => {
+                            ws2.send(JSON.stringify({
+                                id: 106,
+                                method: 'Runtime.evaluate',
+                                params: {
+                                    expression: `localStorage.setItem('__ag_cli_timeout', '${config.settings.cliTimeout * 1000}'); localStorage.setItem('__ag_timeout', '${config.settings.timeout * 1000}'); localStorage.setItem('__ag_log_heartbeat', '${config.settings.logHeartbeat}'); window.__agLogHeartbeat = ${config.settings.logHeartbeat}; window.__agCliTimeout = ${config.settings.cliTimeout * 1000}; window.__agTimeout = ${config.settings.timeout * 1000};`
+                                }
+                            }));
+                            ws2.on('message', () => ws2.close());
                         });
                     }
-                }
-                break;
-            case 'rename':
-                await renameChat(message.idx);
-                break;
-            case 'defineDuty':
-                await defineDuty(message.idx);
-                break;
-            case 'resetAll':
-                await resetAll();
-                break;
-            case 'relink':
-                await relink(message.idx);
-                break;
-            case 'cancelRelink':
-                await cancelRelink(message.idx);
-                break;
-            case 'deleteAgent':
-                await deleteAgent(message.idx);
-                break;
-            case 'refresh':
-                updateDashboard();
-                break;
-        }
-        updateDashboard();
-    });
-    dashboardPanel.webview.html = getDashboardHtml(dashboardPanel.webview, globalExtensionPath);
-    updateDashboard();
-}
-async function updateDashboard() {
-    if (!dashboardPanel)
-        return;
-    try {
-        const tab = await getAntigravityTab();
-        if (!tab) {
-            dashboardPanel.webview.postMessage({ type: 'status', data: { connected: false } });
-            return;
-        }
-        const ws = new ws_1.default(tab.webSocketDebuggerUrl);
-        ws.on('open', () => {
-            const config = loadConfig();
-            const registry = {};
-            const names = {};
-            const duties = {};
-            Object.entries(config.agents).forEach(([idx, a]) => {
-                registry[idx] = a.id;
-                names[idx] = a.name;
-                duties[idx] = a.duty;
-            });
-            const syncScript = `(function(){
-                window.__chatRegistry = window.__chatRegistry || {};
-                window.__chatNames = window.__chatNames || {};
-                window.__chatDuties = window.__chatDuties || {};
-                
-                const fileReg = ${JSON.stringify(registry)};
-                const fileNames = ${JSON.stringify(names)};
-                const fileDuties = ${JSON.stringify(duties)};
-                
-                Object.assign(window.__chatRegistry, fileReg);
-                Object.assign(window.__chatNames, fileNames);
-                Object.assign(window.__chatDuties, fileDuties);
-                
-                localStorage.setItem('__ag_registry', JSON.stringify(window.__chatRegistry));
-            })()`;
-            ws.send(JSON.stringify({ id: 99, method: 'Runtime.evaluate', params: { expression: syncScript } }));
-            const evalStr = `JSON.stringify({ 
-                registry: window.__chatRegistry, 
-                names: window.__chatNames, 
-                duties: window.__chatDuties,
-                lastOutputs: window.__lastOutputs, 
-                lastPrompts: window.__lastPrompts, 
-                busyAgents: JSON.parse(localStorage.getItem('__ag_busy') || '{}'), 
-                captured: !!window.__agCaptured?.last, 
-                relinkMode: window.__relinkMode, 
-                settings: { cliTimeout: window.__agCliTimeout / 1000, timeout: window.__agTimeout / 1000, logHeartbeat: window.__agLogHeartbeat },
-                logs: (window.__agLogs || []).slice(${lastLogIndex}) 
-            })`;
-            ws.send(JSON.stringify({ id: 2, method: 'Runtime.evaluate', params: { expression: evalStr } }));
-        });
-        ws.on('message', (data) => {
-            const msg = JSON.parse(data.toString());
-            if (msg.id === 2) {
-                const browserState = JSON.parse(msg.result?.result?.value || '{}');
-                const config = loadConfig();
-                // Sync browser state BACK to central config if needed (e.g. relink happened in browser)
-                let changed = false;
-                Object.entries(browserState.registry).forEach(([idx, id]) => {
-                    const idStr = id;
-                    if (!config.agents[idx]) {
-                        config.agents[idx] = { id: idStr, name: `Agent ${idx}`, duty: 'General Intelligence' };
-                        changed = true;
-                    }
-                    else if (config.agents[idx].id !== idStr) {
-                        config.agents[idx].id = idStr;
-                        changed = true;
-                    }
-                });
-                if (changed)
-                    saveConfig(config);
-                // Clean up pending deletes once browser confirms they are gone
-                for (const k of Array.from(pendingDeletes)) {
-                    if (!(k in browserState.registry)) {
-                        pendingDeletes.delete(k);
-                    }
-                }
-                dashboardPanel?.webview.postMessage({
-                    type: 'status',
-                    data: {
-                        ...browserState,
-                        connected: bridgeActive,
-                        tokenCaptured: browserState.captured
-                    }
-                });
-                ws.close();
+                    break;
             }
+            this.update();
         });
     }
-    catch (e) {
-        dashboardPanel.webview.postMessage({ type: 'status', data: { connected: false } });
+    async update() {
+        if (!this._view)
+            return;
+        try {
+            const tab = await getAntigravityTab();
+            if (!tab) {
+                const port = vscode.workspace.getConfiguration('antigravity.bridge').get('port', 9223);
+                const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get('rdpPort', 9222);
+                this._view.webview.postMessage({ type: 'status', data: { connected: false, settings: { port, rdpPort } } });
+                return;
+            }
+            const ws = new ws_1.default(tab.webSocketDebuggerUrl);
+            ws.on('open', () => {
+                const config = loadConfig();
+                const registry = {};
+                const names = {};
+                const duties = {};
+                const workspaces = {};
+                Object.entries(config.agents).forEach(([idx, a]) => {
+                    registry[idx] = a.id;
+                    names[idx] = a.name;
+                    duties[idx] = a.duty;
+                    if (a.workspace)
+                        workspaces[idx] = a.workspace;
+                });
+                const syncScript = `(function(){
+                    window.__chatRegistry = window.__chatRegistry || {};
+                    window.__chatNames = window.__chatNames || {};
+                    window.__chatDuties = window.__chatDuties || {};
+                    const fileReg = ${JSON.stringify(registry)};
+                    const fileNames = ${JSON.stringify(names)};
+                    const fileDuties = ${JSON.stringify(duties)};
+                    Object.assign(window.__chatRegistry, fileReg);
+                    Object.assign(window.__chatNames, fileNames);
+                    Object.assign(window.__chatDuties, fileDuties);
+                    localStorage.setItem('__ag_registry', JSON.stringify(window.__chatRegistry));
+                })()`;
+                ws.send(JSON.stringify({ id: 99, method: 'Runtime.evaluate', params: { expression: syncScript } }));
+                const evalStr = `JSON.stringify({ 
+                    registry: window.__chatRegistry, 
+                    names: window.__chatNames, 
+                    duties: window.__chatDuties,
+                    lastOutputs: window.__lastOutputs, 
+                    lastPrompts: window.__lastPrompts, 
+                    busyAgents: JSON.parse(localStorage.getItem('__ag_busy') || '{}'), 
+                    quotas: JSON.parse(localStorage.getItem('__ag_quotas') || '{}'),
+                    models: JSON.parse(localStorage.getItem('__ag_models') || '{}'),
+                    captured: !!window.__agCaptured?.last, 
+                    relinkMode: window.__relinkMode, 
+                    settings: { cliTimeout: window.__agCliTimeout / 1000, timeout: window.__agTimeout / 1000, logHeartbeat: window.__agLogHeartbeat }
+                })`;
+                ws.send(JSON.stringify({ id: 2, method: 'Runtime.evaluate', params: { expression: evalStr } }));
+            });
+            ws.on('message', (data) => {
+                const msg = JSON.parse(data.toString());
+                if (msg.id === 2) {
+                    const browserState = JSON.parse(msg.result?.result?.value || '{}');
+                    const config = loadConfig();
+                    let changed = false;
+                    const currentWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                    Object.entries(browserState.registry).forEach(([idx, id]) => {
+                        const idStr = id;
+                        if (!config.agents[idx]) {
+                            config.agents[idx] = { id: idStr, name: `Agent ${idx}`, duty: 'General Intelligence', workspace: currentWorkspace };
+                            changed = true;
+                        }
+                        else if (config.agents[idx].id !== idStr) {
+                            config.agents[idx].id = idStr;
+                            changed = true;
+                        }
+                    });
+                    if (changed)
+                        saveConfig(config);
+                    if (!bridgeActive && (Object.keys(browserState.registry).length > 0 || browserState.captured)) {
+                        bridgeActive = true;
+                        updateStatusBar(BridgeState.Active);
+                    }
+                    const port = vscode.workspace.getConfiguration('antigravity.bridge').get('port', 9223);
+                    const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get('rdpPort', 9222);
+                    if (browserState.settings) {
+                        browserState.settings.port = port;
+                        browserState.settings.rdpPort = rdpPort;
+                    }
+                    const workspacesPayload = {};
+                    Object.entries(config.agents).forEach(([idx, a]) => {
+                        if (a.workspace)
+                            workspacesPayload[idx] = a.workspace;
+                    });
+                    this._view?.webview.postMessage({
+                        type: 'status',
+                        data: {
+                            ...browserState,
+                            connected: bridgeActive,
+                            tokenCaptured: browserState.captured,
+                            currentWorkspace,
+                            workspaces: workspacesPayload
+                        }
+                    });
+                    ws.close();
+                }
+            });
+        }
+        catch (e) {
+            const port = vscode.workspace.getConfiguration('antigravity.bridge').get('port', 9223);
+            const rdpPort = vscode.workspace.getConfiguration('antigravity.bridge').get('rdpPort', 9222);
+            this._view.webview.postMessage({ type: 'status', data: { connected: false, settings: { port, rdpPort } } });
+        }
     }
 }
+let dashboardProvider;
 async function renameChat(idx) {
     const config = loadConfig();
     const newName = await vscode.window.showInputBox({ prompt: `Name for Chat ${idx}`, value: config.agents[idx]?.name || '' });
@@ -500,12 +633,15 @@ async function deleteAgent(idx) {
     }
 }
 function getDashboardHtml(webview, extensionPath) {
-    const iconPath = vscode.Uri.file(path.join(extensionPath, 'agbridge-icon.png'));
+    const iconPath = vscode.Uri.file(path.join(extensionPath, 'assets', 'agbridge-icon.png'));
     const iconUri = webview.asWebviewUri(iconPath);
+    const linkIconPath = vscode.Uri.file(path.join(extensionPath, 'assets', 'link.svg'));
+    const linkIconUri = webview.asWebviewUri(linkIconPath);
     const htmlPath = path.join(extensionPath, 'src', 'dashboard.html');
     let html = fs.readFileSync(htmlPath, 'utf8');
     // Replace placeholders
     html = html.replace(/\${iconUri}/g, iconUri.toString());
+    html = html.replace(/\${linkIconUri}/g, linkIconUri.toString());
     return html;
 }
 function activate(context) {
@@ -513,6 +649,8 @@ function activate(context) {
     setupGlobalCommand(context.extensionPath);
     outputChannel = vscode.window.createOutputChannel("Antigravity Bridge");
     context.subscriptions.push(outputChannel);
+    dashboardProvider = new DashboardViewProvider(context.extensionPath);
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(DashboardViewProvider.viewType, dashboardProvider));
     context.subscriptions.push(vscode.commands.registerCommand('agbridge.inject', () => injectBridge()));
     context.subscriptions.push(vscode.commands.registerCommand('agbridge.showDashboard', () => showDashboard()));
     injectBridge().catch(() => { });
@@ -537,88 +675,24 @@ function activate(context) {
                     }));
                 });
                 ws.on('message', (data) => {
-                    const msg = JSON.parse(data.toString());
-                    if (msg.command === 'changeIndex') {
-                        const config = loadConfig();
-                        const oldIdx = msg.idx;
-                        vscode.window.showInputBox({ prompt: `New index for ${config.agents[oldIdx]?.name || 'Agent'}`, value: oldIdx }).then(newIdx => {
-                            if (newIdx && newIdx !== oldIdx) {
-                                config.agents[newIdx] = config.agents[oldIdx];
-                                delete config.agents[oldIdx];
-                                saveConfig(config);
-                                updateDashboard();
-                            }
-                        });
-                    }
-                    if (msg.command === 'rename') {
-                        const config = loadConfig();
-                        vscode.window.showInputBox({ prompt: 'Agent Name', value: config.agents[msg.idx]?.name }).then(name => {
-                            if (name) {
-                                if (!config.agents[msg.idx])
-                                    config.agents[msg.idx] = { id: '', name: '', duty: '' };
-                                config.agents[msg.idx].name = name;
-                                saveConfig(config);
-                                updateDashboard();
-                            }
-                        });
-                    }
-                    if (msg.command === 'defineDuty') {
-                        const config = loadConfig();
-                        vscode.window.showInputBox({ prompt: 'Agent Duty', value: config.agents[msg.idx]?.duty }).then(duty => {
-                            if (duty) {
-                                if (!config.agents[msg.idx])
-                                    config.agents[msg.idx] = { id: '', name: '', duty: '' };
-                                config.agents[msg.idx].duty = duty;
-                                saveConfig(config);
-                                updateDashboard();
-                            }
-                        });
-                    }
-                    if (msg.command === 'saveSettings') {
-                        const config = loadConfig();
-                        config.settings.cliTimeout = msg.settings.cliTimeout;
-                        config.settings.timeout = msg.settings.timeout;
-                        config.settings.logHeartbeat = msg.settings.logHeartbeat;
-                        saveConfig(config);
-                        // Push to browser immediately
-                        if (tab) {
-                            const ws2 = new ws_1.default(tab.webSocketDebuggerUrl);
-                            ws2.on('open', () => {
-                                ws2.send(JSON.stringify({
-                                    id: 106,
-                                    method: 'Runtime.evaluate',
-                                    params: {
-                                        expression: `localStorage.setItem('__ag_cli_timeout', '${config.settings.cliTimeout * 1000}'); localStorage.setItem('__ag_timeout', '${config.settings.timeout * 1000}'); localStorage.setItem('__ag_log_heartbeat', '${config.settings.logHeartbeat}'); window.__agLogHeartbeat = ${config.settings.logHeartbeat}; window.__agCliTimeout = ${config.settings.cliTimeout * 1000}; window.__agTimeout = ${config.settings.timeout * 1000};`
-                                    }
-                                }));
-                                ws2.on('message', () => ws2.close());
-                            });
+                    try {
+                        const msg = JSON.parse(data.toString());
+                        if (msg.id === 200) {
+                            const captured = msg.result?.result?.value;
+                            updateStatusBar(captured ? BridgeState.Active : BridgeState.PromptOnce);
+                            ws.close();
                         }
                     }
-                    if (msg.command === 'resetAll') {
-                        const config = loadConfig();
-                        config.agents = {};
-                        saveConfig(config);
-                        updateDashboard();
-                    }
-                    if (msg.command === 'deleteAgent') {
-                        const config = loadConfig();
-                        delete config.agents[msg.idx];
-                        saveConfig(config);
-                        updateDashboard();
-                    }
-                    if (msg.id === 200) {
-                        const captured = msg.result?.result?.value;
-                        updateStatusBar(captured ? BridgeState.Active : BridgeState.PromptOnce);
-                        ws.close();
+                    catch (e) {
+                        // Binary or malformed message
                     }
                 });
                 ws.on('error', () => {
                     updateStatusBar(BridgeState.MissingRDP);
                     ws.close();
                 });
-                if (dashboardPanel) {
-                    await updateDashboard();
+                if (dashboardProvider) {
+                    await dashboardProvider.update();
                 }
             }
         }
@@ -628,6 +702,11 @@ function activate(context) {
         isPolling = false;
     }, 2000);
 }
-function deactivate() { if (statusBarItem)
-    statusBarItem.dispose(); }
+function deactivate() {
+    if (statusBarItem)
+        statusBarItem.dispose();
+    if (bridgeServer) {
+        bridgeServer.close();
+    }
+}
 //# sourceMappingURL=extension.js.map
