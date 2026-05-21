@@ -28,6 +28,19 @@ function setQuotas(q) {
     localStorage.setItem('__ag_quotas', JSON.stringify(q));
     window.__agentQuotas = q;
 }
+function markQuotaExpired(conversationId, resetAt) {
+    const q = getQuotas();
+    q[conversationId] = resetAt || true;
+    setQuotas(q);
+}
+function clearQuota(conversationId) {
+    const q = getQuotas();
+    if (q[conversationId]) { delete q[conversationId]; setQuotas(q); }
+}
+function extractQuotaReset(chunk) {
+    const m = chunk.match(/"quotaResetTimeStamp"\s*:\s*"([^"]+)"/);
+    return m ? m[1] : null;
+}
 
 window.__agId = Math.random().toString(36).substring(7);
 window.__agLogs = window.__agLogs || [];
@@ -192,14 +205,15 @@ window.fetch = async function(...args) {
 
                     if (activeConversationId && chunk.includes('"terminationReason"')) {
                         if (chunk.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
-                            const q = getQuotas();
-                            q[activeConversationId] = true;
-                            setQuotas(q);
-                            log(`💰 [PASSIVE] Quota exceeded for ${activeConversationId.slice(0,8)}`, 'warn');
+                            markQuotaExpired(activeConversationId, extractQuotaReset(chunk));
+                            log(`💰 [PASSIVE] Quota (terminationReason) for ${activeConversationId.slice(0,8)}`, 'warn');
                         } else if (chunk.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
-                            const q = getQuotas();
-                            if (q[activeConversationId]) { delete q[activeConversationId]; setQuotas(q); }
+                            clearQuota(activeConversationId);
                         }
+                    }
+                    if (activeConversationId && chunk.includes('"CORTEX_STEP_TYPE_ERROR_MESSAGE"') && chunk.includes('"errorCode":429')) {
+                        markQuotaExpired(activeConversationId, extractQuotaReset(chunk));
+                        log(`💰 [PASSIVE] Quota (429 step) for ${activeConversationId.slice(0,8)} | reset: ${extractQuotaReset(chunk) || 'unknown'}`, 'warn');
                     }
                 }
             } catch (e) { 
@@ -304,14 +318,15 @@ window.activateStream = async function(conversationId) {
 
                     if (chunk.includes('"terminationReason"')) {
                         if (chunk.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
-                            const q = getQuotas();
-                            q[conversationId] = true;
-                            setQuotas(q);
-                            log(`💰 [PROACTIVE] Quota exceeded for ${conversationId.slice(0,8)}`, 'warn');
+                            markQuotaExpired(conversationId, extractQuotaReset(chunk));
+                            log(`💰 [PROACTIVE] Quota (terminationReason) for ${conversationId.slice(0,8)}`, 'warn');
                         } else if (chunk.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
-                            const q = getQuotas();
-                            if (q[conversationId]) { delete q[conversationId]; setQuotas(q); }
+                            clearQuota(conversationId);
                         }
+                    }
+                    if (chunk.includes('"CORTEX_STEP_TYPE_ERROR_MESSAGE"') && chunk.includes('"errorCode":429')) {
+                        markQuotaExpired(conversationId, extractQuotaReset(chunk));
+                        log(`💰 [PROACTIVE] Quota (429 step) for ${conversationId.slice(0,8)} | reset: ${extractQuotaReset(chunk) || 'unknown'}`, 'warn');
                     }
 
                     if (window.__agVerbose) {
@@ -456,12 +471,9 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
                     
                     // 💰 QUOTA DETECTION
                     if (ch.payload.includes('"EXECUTOR_TERMINATION_REASON_ERROR"')) {
-                        const q = getQuotas();
-                        q[conversationId] = true;
-                        setQuotas(q);
+                        markQuotaExpired(conversationId, extractQuotaReset(ch.payload));
                     } else if (ch.payload.includes('"EXECUTOR_TERMINATION_REASON_IDLE"')) {
-                        const q = getQuotas();
-                        if (q[conversationId]) { delete q[conversationId]; setQuotas(q); }
+                        clearQuota(conversationId);
                     }
 
                     if (!isFastExit) {
