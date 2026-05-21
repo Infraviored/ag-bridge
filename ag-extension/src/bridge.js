@@ -433,6 +433,22 @@ window.postAndReadAuto = async function(prompt, cascadeId, allSteps = false) {
         throw new Error(`Agent not discovered yet. Please focus the chat for ${cascadeId} briefly or wait for auto-discovery.`);
     }
 
+    const quotas = getQuotas();
+    if (quotas[conversationId]) {
+        const qVal = quotas[conversationId];
+        let resetStr = typeof qVal === 'string' ? qVal : 'unknown';
+        if (resetStr !== 'unknown') {
+            try {
+                const diffMs = new Date(resetStr).getTime() - Date.now();
+                if (diffMs > 0) {
+                    const diffSec = Math.ceil(diffMs / 1000);
+                    resetStr = `${resetStr} (in ${diffSec}s)`;
+                }
+            } catch(e) {}
+        }
+        throw new Error(`AGENT ${chatIdx} QUOTA EXCEEDED (Resets at ${resetStr}). Clear in dashboard or wait for reset.`);
+    }
+
     if (window.__busyAgents[conversationId]) {
         const busyInfo = window.__busyAgents[conversationId];
         const last = window.__lastOutputs[conversationId] || "Thinking...";

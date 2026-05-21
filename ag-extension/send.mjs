@@ -90,6 +90,7 @@ ws.on('open', () => {
       params: { expression: `JSON.stringify({ 
         busy: JSON.parse(localStorage.getItem('__ag_busy') || '{}'),
         registry: JSON.parse(localStorage.getItem('__ag_registry') || '{}'),
+        quotas: JSON.parse(localStorage.getItem('__ag_quotas') || '{}'),
         windowId: window.__agId,
         activeTrajectories: window.__activeTrajectories || {},
         pendingCmds: Object.keys(localStorage).filter(k => k.startsWith('__ag_cmd_')).length,
@@ -105,6 +106,7 @@ ws.on('open', () => {
         console.log(`\x1b[35mBusy Agents:\x1b[0m`, JSON.stringify(state.busy, null, 2));
         console.log(`\x1b[32mActive Trajectories:\x1b[0m`, JSON.stringify(state.activeTrajectories, null, 2));
         console.log(`\x1b[31mPending Mailbox Commands:\x1b[0m`, state.pendingCmds);
+        console.log(`\x1b[31mExceeded Quotas:\x1b[0m`, JSON.stringify(state.quotas || {}, null, 2));
         ws.close();
         process.exit(0);
       }
